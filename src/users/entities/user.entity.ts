@@ -1,0 +1,74 @@
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+
+export enum UserRole {
+  USER = 'USER',
+  ADMIN = 'ADMIN',
+}
+
+@Entity()
+export class User {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column()
+  name: string;
+
+  @Column()
+  age: number;
+
+  @Column({ type: 'varchar', unique: true, nullable: true })
+  email: string | null;
+
+  @Column({ type: 'varchar', unique: true, nullable: true })
+  phoneNumber: string | null;
+
+  @Column()
+  password: string;
+
+  // Perfil
+  @Column({ type: 'varchar', unique: true, nullable: true })
+  nickname: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  city: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  avatarUrl: string | null;
+
+  @Column({ default: false })
+  isProfileComplete: boolean;
+
+  @Column({
+    type: 'enum',
+    enum: UserRole,
+    default: UserRole.USER,
+  })
+  role: UserRole;
+
+  @Column({ default: 0 })
+  participation: number;
+
+  @Column({ default: 0 })
+  coins: number;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+
+  @Column({ type: 'varchar', nullable: true })
+  notificationToken: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  recoveryCode: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  recoveryCodeExpires: Date | null;
+}

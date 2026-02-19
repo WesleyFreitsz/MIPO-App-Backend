@@ -1,0 +1,19 @@
+<style>
+  .container { font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; }
+  .header { background-color: #E11D48; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+  .content { padding: 20px; border: 1px solid #e2e8f0; border-top: none; }
+  .code-box { background: #f1f5f9; padding: 20px; font-size: 32px; font-weight: bold; text-align: center; border-radius: 10px; letter-spacing: 5px; color: #E11D48; }
+</style>
+
+<div class="container">
+  <div class="header">
+    <h1>Olá, {{name}}!</h1>
+  </div>
+  <div class="content">
+    <p>Você solicitou a recuperação de senha na <strong>MIPO</strong>.</p>
+    <p>Use o código abaixo para redefinir sua senha:</p>
+    <div class="code-box">{{code}}</div>
+    <p>Este código expira em <strong>2 minutos</strong>.</p>
+    <p>Se não foi você, pode ignorar este e-mail com segurança.</p>
+  </div>
+</div>

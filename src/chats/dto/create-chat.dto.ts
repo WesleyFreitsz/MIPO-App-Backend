@@ -1,0 +1,15 @@
+import { IsString, IsOptional, MinLength } from 'class-validator';
+
+export class CreateChatDto {
+  @IsString()
+  @MinLength(1)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+}
