@@ -57,6 +57,9 @@ export class User {
   @Column({ default: 0 })
   coins: number;
 
+  @Column({ default: false })
+  banned: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -77,7 +77,8 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!this.socketChats.has(client.id)) {
       this.socketChats.set(client.id, []);
     }
-    this.socketChats.get(client.id).push(data.chatId);
+    const chats = this.socketChats.get(client.id);
+    if (chats) chats.push(data.chatId);
 
     console.log(`[WS] Usuário entrou no chat: ${data.chatId}`);
     // Notificar todos que alguém entrou no chat
@@ -101,8 +102,8 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.leave(roomName);
 
     // Remover do rastreamento
-    if (this.socketChats.has(client.id)) {
-      const chats = this.socketChats.get(client.id);
+    const chats = this.socketChats.get(client.id);
+    if (chats) {
       this.socketChats.set(
         client.id,
         chats.filter((c) => c !== data.chatId),

@@ -18,6 +18,11 @@ import { Notifications } from './notifications/entities/notifications.entity';
 import { FriendsModule } from './friends/friends.module';
 import { PostsModule } from './posts/posts.module';
 import { ChatsModule } from './chats/chats.module';
+import { AchievementsModule } from './achievements/achievements.module';
+import { RewardsModule } from './rewards/rewards.module';
+import { GamesModule } from './games/games.module';
+import { RoomsModule } from './rooms/rooms.module';
+import { FinanceModule } from './finance/finance.module';
 import { Friendship } from './friends/entities/friendship.entity';
 import { Post } from './posts/entities/post.entity';
 import { PostComment } from './posts/entities/post-comment.entity';
@@ -25,6 +30,12 @@ import { PostLike } from './posts/entities/post-like.entity';
 import { Chat } from './chats/entities/chat.entity';
 import { ChatMember } from './chats/entities/chat-member.entity';
 import { ChatMessage } from './chats/entities/chat-message.entity';
+import { Achievement } from './achievements/entities/achievement.entity';
+import { Reward } from './rewards/entities/reward.entity';
+import { Game } from './games/entities/game.entity';
+import { Room } from './rooms/entities/room.entity';
+import { Transaction } from './finance/entities/transaction.entity';
+import { UploadsController } from './uploads/uploads.controller';
 
 @Module({
   imports: [
@@ -44,6 +55,11 @@ import { ChatMessage } from './chats/entities/chat-message.entity';
         Chat,
         ChatMember,
         ChatMessage,
+        Achievement,
+        Reward,
+        Game,
+        Room,
+        Transaction,
       ],
       synchronize: true,
       ssl: {
@@ -77,6 +93,12 @@ import { ChatMessage } from './chats/entities/chat-message.entity';
     FriendsModule,
     PostsModule,
     ChatsModule,
+    AchievementsModule,
+    RewardsModule,
+    GamesModule,
+    RoomsModule,
+    FinanceModule,
   ],
+  controllers: [UploadsController],
 })
 export class AppModule {}

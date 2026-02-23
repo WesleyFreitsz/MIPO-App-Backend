@@ -29,16 +29,8 @@ export class UsersService {
    * Atualização segura e blindada contra UpdateValuesMissingError
    */
   async update(id: string, data: Partial<User>) {
-    this.logger.debug(
-      `[UPDATE] Dados recebidos para ID ${id}: ${JSON.stringify(data)}`,
-    );
-
     // Função helper para limpar dados (melhora tipagem)
     const cleanData = this.cleanPartialData(data);
-
-    this.logger.debug(
-      `[UPDATE] cleanData após filtro: ${JSON.stringify(cleanData)}`,
-    );
 
     if (Object.keys(cleanData).length === 0) {
       this.logger.warn(
@@ -50,12 +42,9 @@ export class UsersService {
     try {
       await this.usersRepository.update(id, cleanData);
       this.logger.debug(`[UPDATE] Sucesso ao atualizar usuário ${id}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `[UPDATE] Erro ao atualizar usuário ${id}: ${error.message}`,
-      );
-      this.logger.error(
-        `[UPDATE] cleanData que causou erro: ${JSON.stringify(cleanData)}`,
       );
       throw error;
     }
@@ -66,17 +55,40 @@ export class UsersService {
   private cleanPartialData(data: Partial<User>): Partial<User> {
     return Object.entries(data).reduce<Partial<User>>((acc, [key, value]) => {
       if (value !== undefined && value !== null) {
-        // @ts-expect-error Suppress se TS ainda reclamar de mismatch (remova após teste)
+        // @ts-expect-error Suppress se TS ainda reclamar de mismatch
         acc[key as keyof User] = value;
       }
       return acc;
     }, {});
   }
 
+  async findAllForAdmin(skip = 0, take = 50) {
+    const users = await this.usersRepository.find({
+      skip,
+      take,
+      order: { name: 'ASC' },
+    });
+    const result = users.map((u) => {
+      const { password, ...rest } = u;
+      return rest;
+    });
+    return { data: result };
+  }
+
+  async addCoins(id: string, amount: number) {
+    const user = await this.usersRepository.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuário não encontrado.');
+    user.coins = (user.coins || 0) + amount;
+    await this.usersRepository.save(user);
+    return this.findOne(id);
+  }
+
+  async setBanned(id: string, banned: boolean) {
+    return this.update(id, { banned });
+  }
+
   async updateProfile(id: string, dto: UpdateProfileDto) {
-    this.logger.debug(
-      `[PROFILE] Iniciando updateProfile para ID ${id} | DTO: ${JSON.stringify(dto)}`,
-    );
+    this.logger.debug(`[PROFILE] Iniciando updateProfile para ID ${id}`);
 
     const user = await this.usersRepository.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuário não encontrado');
@@ -91,16 +103,12 @@ export class UsersService {
       }
     }
 
+    // Se o dto.avatarUrl contiver a string Base64, ela substituirá a antiga na mesma coluna.
     const updateData = {
       ...dto,
       isProfileComplete: true,
     };
 
-    this.logger.debug(
-      `[PROFILE] Dados finais que serão enviados para update: ${JSON.stringify(updateData)}`,
-    );
-
-    // Chama o método blindado
     const result = await this.update(id, updateData);
 
     this.logger.debug(

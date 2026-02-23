@@ -7,10 +7,13 @@ import {
   Request,
   Logger,
   Param,
+  ForbiddenException,
+  Query,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
 import { UpdateProfileDto } from 'src/auth/dto/update-profile.dto';
+import { UserRole } from './entities/user.entity';
 
 @Controller('users')
 export class UsersController {
@@ -20,8 +23,35 @@ export class UsersController {
 
   @UseGuards(AuthGuard('jwt'))
   @Get('profile')
-  getProfile(@Request() req) {
+  getProfile(@Request() req: any) {
     return this.usersService.findOne(req.user.userId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('admin/list')
+  async adminList(@Request() req: any, @Query('skip') skip = 0, @Query('take') take = 50) {
+    if (req.user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Apenas administradores podem listar usuários.');
+    }
+    return this.usersService.findAllForAdmin(Number(skip), Number(take));
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch(':id/coins')
+  async adminAddCoins(@Request() req: any, @Param('id') id: string, @Body() body: { amount?: number }) {
+    if (req.user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Apenas administradores podem ajustar moedas.');
+    }
+    return this.usersService.addCoins(id, body?.amount ?? 1);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch(':id/ban')
+  async adminBan(@Request() req: any, @Param('id') id: string, @Body() body: { banned?: boolean }) {
+    if (req.user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Apenas administradores podem banir usuários.');
+    }
+    return this.usersService.setBanned(id, body?.banned ?? true);
   }
 
   @UseGuards(AuthGuard('jwt'))

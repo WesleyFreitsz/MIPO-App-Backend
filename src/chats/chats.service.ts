@@ -292,15 +292,46 @@ export class ChatsService {
 
     // Adiciona membros
     const members = [
-      { chatId: savedChat.id, userId, role: ChatMemberRole.ADMIN },
-      {
+      this.memberRepository.create({
+        chatId: savedChat.id,
+        userId,
+        role: ChatMemberRole.ADMIN,
+      }),
+      this.memberRepository.create({
         chatId: savedChat.id,
         userId: targetUserId,
         role: ChatMemberRole.MEMBER,
-      },
+      }),
     ];
 
     await this.memberRepository.save(members);
+
+    // Proteção contra condição de corrida: pode ter sido criado um chat privado
+    // para os mesmos dois usuários por outra requisição concorrente. Re-checar
+    // se já existe outro chat privado entre esses dois usuários e, caso exista,
+    // remover o chat recém-criado e retornar o existente.
+    const duplicateChat = await this.chatRepository
+      .createQueryBuilder('chat')
+      .where('chat.type = :type', { type: ChatType.PRIVATE })
+      .andWhere('chat.id != :savedId', { savedId: savedChat.id })
+      .innerJoin('chat.members', 'member1', 'member1.userId = :userId', {
+        userId,
+      })
+      .innerJoin('chat.members', 'member2', 'member2.userId = :targetUserId', {
+        targetUserId,
+      })
+      .getOne();
+
+    if (duplicateChat) {
+      try {
+        await this.chatRepository.remove(savedChat);
+      } catch (err) {
+        // se remoção falhar, logamos e seguimos retornando o chat existente
+        console.error('Erro ao remover chat duplicado temporário:', err);
+      }
+
+      return this.getChatDetails(duplicateChat.id);
+    }
 
     return this.getChatDetails(savedChat.id);
   }
