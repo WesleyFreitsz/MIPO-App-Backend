@@ -44,7 +44,9 @@ import { Report } from './reports/entities/report.entity';
     ConfigModule.forRoot(),
     TypeOrmModule.forRoot({
       type: 'postgres',
-      url: process.env.DIRECT_URL,
+      url:
+        process.env.DIRECT_URL ||
+        'postgresql://postgres.feesfumbjgvzgebegsvj:MIPOBACKENDFORTE@aws-1-us-east-1.pooler.supabase.com:6543/postgres',
       entities: [
         User,
         Event,
