@@ -20,7 +20,7 @@ export enum EventStatus {
   PENDING = 'PENDING',
   APPROVED = 'APPROVED',
   REPROVED = 'REPROVED',
-  CONCLUDED = 'CONCLUDED', // <--- NOVO STATUS
+  CONCLUDED = 'CONCLUDED',
 }
 
 @Entity()
@@ -51,6 +51,10 @@ export class Event {
 
   @Column({ nullable: true })
   rejectionReason: string;
+
+  // 👇 NOVA COLUNA ADICIONADA AQUI PARA SALVAR O CHAT 👇
+  @Column({ nullable: true })
+  chatId: string;
 
   @ManyToOne(() => User)
   creator: User;

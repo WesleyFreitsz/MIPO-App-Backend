@@ -1,3 +1,4 @@
+// src/chats/entities/chat-member.entity.ts
 import {
   Entity,
   Column,
@@ -39,7 +40,9 @@ export class ChatMember {
   @Column({ type: 'timestamp', nullable: true })
   lastReadAt: Date | null;
 
-  // Relacionamentos
+  @UpdateDateColumn()
+  updatedAt: Date;
+
   @ManyToOne(() => Chat, (chat) => chat.members, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'chatId' })
   chat: Chat;

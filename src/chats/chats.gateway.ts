@@ -56,6 +56,10 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.userSockets.set(data.userId, client.id);
     client.data.userId = data.userId;
+
+    // 👇 Coloca o usuário em uma sala pessoal e global
+    client.join(`user:${data.userId}`);
+
     console.log(`[WS] Usuário autenticado: ${data.userId} -> ${client.id}`);
     client.emit('auth:success', { message: 'Autenticado com sucesso' });
     return { success: true };
@@ -160,9 +164,15 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         },
       });
 
+      // 👇 Avisa as Salas Pessoais para atualizarem a lista global
+      const chatDetails = await this.chatsService.getChatDetails(data.chatId);
+      chatDetails.members.forEach((member) => {
+        this.server.to(`user:${member.userId}`).emit('chat:list-update');
+      });
+
       console.log(`[WS] Mensagem enviada no chat ${data.chatId} por ${userId}`);
       return { success: true, messageId: message.id };
-    } catch (error) {
+    } catch (error: any) {
       console.error('[WS] Erro ao enviar mensagem:', error);
       client.emit('error', {
         message: error.message || 'Erro ao enviar mensagem',
@@ -197,9 +207,15 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         timestamp: new Date(),
       });
 
+      // 👇 Avisa as Salas Pessoais para atualizarem a bolinha vermelha na lista
+      const chatDetails = await this.chatsService.getChatDetails(data.chatId);
+      chatDetails.members.forEach((member) => {
+        this.server.to(`user:${member.userId}`).emit('chat:list-update');
+      });
+
       console.log(`[WS] Mensagens marcadas como lidas no chat ${data.chatId}`);
       return { success: true };
-    } catch (error) {
+    } catch (error: any) {
       console.error('[WS] Erro ao marcar como lido:', error);
       client.emit('error', {
         message: error.message || 'Erro ao marcar como lido',

@@ -43,7 +43,7 @@ export class ChatsService {
 
     const savedChat = await this.chatRepository.save(chat);
 
-    // Adiciona o criador como membro admin
+    // Adiciona o criador como membro admin do grupo
     const member = this.memberRepository.create({
       chatId: savedChat.id,
       userId,
@@ -72,7 +72,7 @@ export class ChatsService {
   }
 
   /**
-   * Listar todos os chats do usuário
+   * Listar todos os chats do usuário (Privados, Grupos e Eventos)
    */
   async getUserChats(userId: string, skip = 0, take = 20) {
     const [chats, total] = await this.chatRepository
@@ -90,10 +90,8 @@ export class ChatsService {
       .take(take)
       .getManyAndCount();
 
-    // Adiciona informação da última mensagem e contador de não lidos
     const chatsWithDetails = chats.map((chat) => {
       const lastMessage = chat.messages?.[0];
-      const userMember = chat.members?.find((m) => m.userId === userId);
       const unreadCount =
         chat.messages?.filter((m) => !m.isRead && m.userId !== userId).length ||
         0;
@@ -109,7 +107,7 @@ export class ChatsService {
   }
 
   /**
-   * Adicionar membros a um chat
+   * Adicionar membros a um chat (Apenas Admin do Grupo)
    */
   async addMembers(chatId: string, userId: string, dto: AddMembersDto) {
     const chat = await this.chatRepository.findOne({
@@ -121,7 +119,6 @@ export class ChatsService {
       throw new NotFoundException('Chat não encontrado');
     }
 
-    // Verifica se o usuário é admin do chat
     const userMember = chat.members?.find((m) => m.userId === userId);
     if (!userMember || userMember.role !== ChatMemberRole.ADMIN) {
       throw new ForbiddenException(
@@ -129,22 +126,58 @@ export class ChatsService {
       );
     }
 
-    // Adiciona novos membros
-    const newMembers = dto.memberIds.map((memberId) =>
-      this.memberRepository.create({
-        chatId,
-        userId: memberId,
-        role: ChatMemberRole.MEMBER,
-      }),
+    // 🚀 PREVENÇÃO DE DUPLICATAS: Filtra amigos que já estão no chat
+    const existingMemberIds = chat.members.map((m) => m.userId);
+    const newMembersIds = dto.memberIds.filter(
+      (id) => !existingMemberIds.includes(id),
     );
 
-    await this.memberRepository.save(newMembers);
+    if (newMembersIds.length > 0) {
+      const newMembers = newMembersIds.map((memberId) =>
+        this.memberRepository.create({
+          chatId,
+          userId: memberId,
+          role: ChatMemberRole.MEMBER,
+        }),
+      );
+      await this.memberRepository.save(newMembers);
+    }
 
     return this.getChatDetails(chatId);
   }
 
   /**
-   * Remover membro do chat
+   * Promover um membro a Admin do Grupo
+   */
+  async promoteToAdmin(chatId: string, adminId: string, targetUserId: string) {
+    const requester = await this.memberRepository.findOne({
+      where: { chatId, userId: adminId },
+    });
+
+    if (!requester || requester.role !== ChatMemberRole.ADMIN) {
+      throw new ForbiddenException(
+        'Apenas admins do grupo podem promover outros membros',
+      );
+    }
+
+    const targetMember = await this.memberRepository.findOne({
+      where: { chatId, userId: targetUserId },
+    });
+
+    if (!targetMember) {
+      throw new NotFoundException('Membro não encontrado no chat');
+    }
+
+    await this.memberRepository.update(
+      { chatId, userId: targetUserId },
+      { role: ChatMemberRole.ADMIN },
+    );
+
+    return { message: 'Membro promovido a admin com sucesso' };
+  }
+
+  /**
+   * Remover membro do chat (Apenas Admin do Grupo)
    */
   async removeMember(chatId: string, userId: string, memberId: string) {
     const chat = await this.chatRepository.findOne({
@@ -156,7 +189,6 @@ export class ChatsService {
       throw new NotFoundException('Chat não encontrado');
     }
 
-    // Verifica se o usuário é admin
     const userMember = chat.members?.find((m) => m.userId === userId);
     if (!userMember || userMember.role !== ChatMemberRole.ADMIN) {
       throw new ForbiddenException(
@@ -164,7 +196,6 @@ export class ChatsService {
       );
     }
 
-    // Remove o membro
     const member = await this.memberRepository.findOne({
       where: { chatId, userId: memberId },
     });
@@ -191,7 +222,6 @@ export class ChatsService {
       throw new NotFoundException('Chat não encontrado');
     }
 
-    // Verifica se o usuário é membro
     const isMember = chat.members?.some((m) => m.userId === userId);
     if (!isMember) {
       throw new ForbiddenException('Você não é membro deste chat');
@@ -238,7 +268,6 @@ export class ChatsService {
       { isRead: true },
     );
 
-    // Atualiza lastReadAt do membro
     await this.memberRepository.update(
       { chatId, userId },
       { lastReadAt: new Date() },
@@ -259,7 +288,6 @@ export class ChatsService {
       throw new NotFoundException('Usuário não encontrado');
     }
 
-    // Verifica se já existe um chat privado
     const existingChat = await this.chatRepository
       .createQueryBuilder('chat')
       .where('chat.type = :type', { type: ChatType.PRIVATE })
@@ -281,7 +309,6 @@ export class ChatsService {
       return this.getChatDetails(existingChat.id);
     }
 
-    // Cria novo chat privado
     const chat = this.chatRepository.create({
       type: ChatType.PRIVATE,
       name: user.nickname || user.name,
@@ -290,7 +317,6 @@ export class ChatsService {
 
     const savedChat = await this.chatRepository.save(chat);
 
-    // Adiciona membros
     const members = [
       this.memberRepository.create({
         chatId: savedChat.id,
@@ -306,50 +332,21 @@ export class ChatsService {
 
     await this.memberRepository.save(members);
 
-    // Proteção contra condição de corrida: pode ter sido criado um chat privado
-    // para os mesmos dois usuários por outra requisição concorrente. Re-checar
-    // se já existe outro chat privado entre esses dois usuários e, caso exista,
-    // remover o chat recém-criado e retornar o existente.
-    const duplicateChat = await this.chatRepository
-      .createQueryBuilder('chat')
-      .where('chat.type = :type', { type: ChatType.PRIVATE })
-      .andWhere('chat.id != :savedId', { savedId: savedChat.id })
-      .innerJoin('chat.members', 'member1', 'member1.userId = :userId', {
-        userId,
-      })
-      .innerJoin('chat.members', 'member2', 'member2.userId = :targetUserId', {
-        targetUserId,
-      })
-      .getOne();
-
-    if (duplicateChat) {
-      try {
-        await this.chatRepository.remove(savedChat);
-      } catch (err) {
-        // se remoção falhar, logamos e seguimos retornando o chat existente
-        console.error('Erro ao remover chat duplicado temporário:', err);
-      }
-
-      return this.getChatDetails(duplicateChat.id);
-    }
-
     return this.getChatDetails(savedChat.id);
   }
 
   /**
-   * Deletar chat
+   * Deletar chat (Apenas Criador)
    */
   async deleteChat(chatId: string, userId: string) {
     const chat = await this.chatRepository.findOne({
       where: { id: chatId },
-      relations: ['members'],
     });
 
     if (!chat) {
       throw new NotFoundException('Chat não encontrado');
     }
 
-    // Verifica se o usuário é o criador
     if (chat.createdByUserId !== userId) {
       throw new ForbiddenException('Apenas o criador do chat pode deletá-lo');
     }
@@ -358,6 +355,30 @@ export class ChatsService {
     return { message: 'Chat deletado com sucesso' };
   }
 
+  async updateChatDetails(
+    chatId: string,
+    userId: string,
+    data: { name?: string; description?: string; imageUrl?: string },
+  ) {
+    const chat = await this.chatRepository.findOne({
+      where: { id: chatId },
+      relations: ['members'],
+    });
+
+    if (!chat) throw new NotFoundException('Chat não encontrado');
+
+    const userMember = chat.members?.find((m) => m.userId === userId);
+    if (!userMember || userMember.role !== ChatMemberRole.ADMIN) {
+      throw new ForbiddenException('Apenas admins podem editar o grupo');
+    }
+
+    if (data.name !== undefined) chat.name = data.name;
+    if (data.description !== undefined) chat.description = data.description;
+    if (data.imageUrl !== undefined) chat.imageUrl = data.imageUrl;
+
+    await this.chatRepository.save(chat);
+    return this.getChatDetails(chatId);
+  }
   /**
    * Sair de um chat
    */

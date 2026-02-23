@@ -1,48 +1,77 @@
 import {
   Entity,
   Column,
-  PrimaryGeneratedColumn,
+  PrimaryColumn,
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 
+export enum RoomType {
+  SALINHA = 'salinha',
+  SALAO_INTERNO = 'salao_interno',
+  SALAO_EXTERNO = 'salao_externo',
+}
+
+export enum ReservationStatus {
+  PENDING = 'pending',
+  APPROVED = 'approved',
+  CANCELLED = 'cancelled',
+}
+
+export interface RoomParticipant {
+  userId: string;
+  name: string;
+  activity?: string | null;
+  activityType?: 'game' | 'custom' | null;
+  isActivityPublic?: boolean; // true = outros podem se juntar, false = apenas admins veem
+  startTime: string;
+  endTime: string;
+  joinedAt: Date;
+}
+
 @Entity('rooms')
 export class Room {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryColumn('uuid')
   id: string;
 
-  @Column()
-  game: string;
+  @Column('enum', { enum: RoomType, default: RoomType.SALAO_INTERNO })
+  type: RoomType;
 
-  @Column('uuid')
-  organizerId: string;
+  @Column('uuid', { nullable: true })
+  organizerId: string | null;
 
-  @ManyToOne(() => User, { eager: true })
+  @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'organizerId' })
-  organizer: User;
+  organizer: User | null;
 
-  @Column()
+  @Column({ default: () => 'CURRENT_DATE' })
   date: string;
 
-  @Column()
-  time: string;
+  @Column({ default: '10:00' })
+  startTime: string;
 
-  @Column('int', { default: 4 })
-  maxParticipants: number;
-
-  @Column({ default: true })
-  isPublic: boolean;
+  @Column({ default: '12:00' })
+  endTime: string;
 
   @Column('text', { nullable: true })
-  description: string | null;
+  activity: string | null;
+
+  @Column('varchar', { nullable: true, default: null })
+  activityType: 'game' | 'custom' | null;
+
+  @Column('simple-json', { default: '[]' })
+  participants: RoomParticipant[];
+
+  @Column('enum', {
+    enum: ReservationStatus,
+    default: ReservationStatus.PENDING,
+  })
+  reservationStatus: ReservationStatus;
 
   @Column('uuid', { nullable: true })
   chatId: string | null;
-
-  @Column('simple-array', { default: '' })
-  participantIds: string[];
 
   @CreateDateColumn()
   createdAt: Date;

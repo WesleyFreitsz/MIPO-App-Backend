@@ -10,6 +10,8 @@ import { PostComment } from './entities/post-comment.entity';
 import { PostLike } from './entities/post-like.entity';
 import { CreatePostDto } from './dto/create-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
+import { NotificationsService } from '../notifications/notifications.service';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class PostsService {
@@ -20,23 +22,17 @@ export class PostsService {
     private commentRepository: Repository<PostComment>,
     @InjectRepository(PostLike)
     private likeRepository: Repository<PostLike>,
+    private notificationsService: NotificationsService, // Notificações injetadas
   ) {}
 
-  /**
-   * Criar novo post
-   */
   async createPost(userId: string, dto: CreatePostDto) {
     const post = this.postRepository.create({
       userId,
       ...dto,
     });
-
     return this.postRepository.save(post);
   }
 
-  /**
-   * Listar posts do feed (de amigos)
-   */
   async getFeed(userId: string, skip = 0, take = 20) {
     const [posts, total] = await this.postRepository.findAndCount({
       relations: ['user', 'likes', 'comments'],
@@ -45,7 +41,6 @@ export class PostsService {
       take,
     });
 
-    // Adiciona informações se o usuário deu like e contador
     const postsWithLikes = posts.map((post) => ({
       ...post,
       likeCount: post.likes?.length || 0,
@@ -56,9 +51,6 @@ export class PostsService {
     return { data: postsWithLikes, total, skip, take };
   }
 
-  /**
-   * Listar posts de um usuário específico
-   */
   async getUserPosts(userId: string, skip = 0, take = 20) {
     const [posts, total] = await this.postRepository.findAndCount({
       where: { userId },
@@ -78,9 +70,6 @@ export class PostsService {
     return { data: postsWithLikes, total, skip, take };
   }
 
-  /**
-   * Obter um post específico
-   */
   async getPost(postId: string, userId: string) {
     const post = await this.postRepository.findOne({
       where: { id: postId },
@@ -99,119 +88,94 @@ export class PostsService {
     };
   }
 
-  /**
-   * Atualizar post
-   */
   async updatePost(postId: string, userId: string, dto: CreatePostDto) {
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-    });
-
-    if (!post) {
-      throw new NotFoundException('Post não encontrado');
-    }
-
-    if (post.userId !== userId) {
+    const post = await this.postRepository.findOne({ where: { id: postId } });
+    if (!post) throw new NotFoundException('Post não encontrado');
+    if (post.userId !== userId)
       throw new BadRequestException(
         'Você não tem permissão para atualizar este post',
       );
-    }
 
     Object.assign(post, dto);
     return this.postRepository.save(post);
   }
 
-  /**
-   * Deletar post
-   */
   async deletePost(postId: string, userId: string) {
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-    });
-
-    if (!post) {
-      throw new NotFoundException('Post não encontrado');
-    }
-
-    if (post.userId !== userId) {
+    const post = await this.postRepository.findOne({ where: { id: postId } });
+    if (!post) throw new NotFoundException('Post não encontrado');
+    if (post.userId !== userId)
       throw new BadRequestException(
         'Você não tem permissão para deletar este post',
       );
-    }
 
     await this.postRepository.remove(post);
     return { message: 'Post deletado com sucesso' };
   }
 
-  /**
-   * Dar like em um post
-   */
   async likePost(postId: string, userId: string) {
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-    });
+    const post = await this.postRepository.findOne({ where: { id: postId } });
+    if (!post) throw new NotFoundException('Post não encontrado');
 
-    if (!post) {
-      throw new NotFoundException('Post não encontrado');
-    }
-
-    // Verifica se já deu like
     const existingLike = await this.likeRepository.findOne({
       where: { postId, userId },
     });
-
-    if (existingLike) {
+    if (existingLike)
       throw new BadRequestException('Você já deu like neste post');
+
+    const like = this.likeRepository.create({ postId, userId });
+    await this.likeRepository.save(like);
+
+    // NOTIFICAÇÃO DE LIKE (Trava para não notificar a si mesmo)
+    if (post.userId !== userId) {
+      const liker = await this.postRepository.manager.findOne(User, {
+        where: { id: userId },
+      });
+      if (liker) {
+        await this.notificationsService.sendToUser(
+          post.userId,
+          'Novo Like! ❤️',
+          `@${liker.nickname || liker.name} curtiu seu post.`,
+        );
+      }
     }
 
-    const like = this.likeRepository.create({
-      postId,
-      userId,
-    });
-
-    return this.likeRepository.save(like);
+    return like;
   }
 
-  /**
-   * Remover like de um post
-   */
   async unlikePost(postId: string, userId: string) {
     const like = await this.likeRepository.findOne({
       where: { postId, userId },
     });
-
-    if (!like) {
-      throw new NotFoundException('Like não encontrado');
-    }
+    if (!like) throw new NotFoundException('Like não encontrado');
 
     await this.likeRepository.remove(like);
     return { message: 'Like removido com sucesso' };
   }
 
-  /**
-   * Comentar em um post
-   */
   async commentPost(postId: string, userId: string, dto: CreateCommentDto) {
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-    });
+    const post = await this.postRepository.findOne({ where: { id: postId } });
+    if (!post) throw new NotFoundException('Post não encontrado');
 
-    if (!post) {
-      throw new NotFoundException('Post não encontrado');
+    const comment = this.commentRepository.create({ postId, userId, ...dto });
+    await this.commentRepository.save(comment);
+
+    // NOTIFICAÇÃO DE COMENTÁRIO (Trava para não notificar a si mesmo)
+    if (post.userId !== userId) {
+      const commenter = await this.postRepository.manager.findOne(User, {
+        where: { id: userId },
+      });
+      if (commenter) {
+        await this.notificationsService.sendToUser(
+          post.userId,
+          'Novo Comentário! 💬',
+          `@${commenter.nickname || commenter.name} comentou no seu post.`,
+        );
+      }
     }
 
-    const comment = this.commentRepository.create({
-      postId,
-      userId,
-      ...dto,
-    });
-
-    return this.commentRepository.save(comment);
+    return comment;
   }
 
-  /**
-   * Listar comentários de um post
-   */
   async getPostComments(postId: string, skip = 0, take = 20) {
     const [comments, total] = await this.commentRepository.findAndCount({
       where: { postId },
@@ -220,27 +184,18 @@ export class PostsService {
       skip,
       take,
     });
-
     return { data: comments, total, skip, take };
   }
 
-  /**
-   * Deletar comentário
-   */
   async deleteComment(commentId: string, userId: string) {
     const comment = await this.commentRepository.findOne({
       where: { id: commentId },
     });
-
-    if (!comment) {
-      throw new NotFoundException('Comentário não encontrado');
-    }
-
-    if (comment.userId !== userId) {
+    if (!comment) throw new NotFoundException('Comentário não encontrado');
+    if (comment.userId !== userId)
       throw new BadRequestException(
         'Você não tem permissão para deletar este comentário',
       );
-    }
 
     await this.commentRepository.remove(comment);
     return { message: 'Comentário deletado com sucesso' };

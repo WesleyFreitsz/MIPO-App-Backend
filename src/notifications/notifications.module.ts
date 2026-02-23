@@ -1,16 +1,16 @@
-import { Module } from '@nestjs/common';
+import { Module, Global } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Notifications } from './entities/notifications.entity';
-import { User } from 'src/users/entities/user.entity';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
+import { Notifications } from './entities/notifications.entity';
+import { User } from 'src/users/entities/user.entity';
+import { NotificationsGateway } from './notifications.gateway';
 
+@Global() // Deixa global para o Posts e Reports Service usarem sem precisar importar toda hora
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([Notifications, User]), // Repositórios usados
-  ],
+  imports: [TypeOrmModule.forFeature([Notifications, User])],
   controllers: [NotificationsController],
-  providers: [NotificationsService],
-  exports: [NotificationsService], // IMPORTANTE: Exportamos para o EventsModule usar
+  providers: [NotificationsService, NotificationsGateway],
+  exports: [NotificationsService, NotificationsGateway],
 })
 export class NotificationsModule {}

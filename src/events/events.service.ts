@@ -9,14 +9,20 @@ import { Repository, LessThan, Not } from 'typeorm';
 import { Event, EventStatus } from './entities/event.entity';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { User, UserRole } from 'src/users/entities/user.entity';
+import { Chat, ChatType } from 'src/chats/entities/chat.entity';
+import {
+  ChatMember,
+  ChatMemberRole,
+} from 'src/chats/entities/chat-member.entity';
 
 @Injectable()
 export class EventsService {
   constructor(
-    @InjectRepository(Event)
-    private eventRepository: Repository<Event>,
-    @InjectRepository(User)
-    private userRepository: Repository<User>,
+    @InjectRepository(Event) private eventRepository: Repository<Event>,
+    @InjectRepository(User) private userRepository: Repository<User>,
+    @InjectRepository(Chat) private chatRepository: Repository<Chat>, // ADICIONADO AQUI
+    @InjectRepository(ChatMember)
+    private chatMemberRepository: Repository<ChatMember>,
     private notifService: NotificationsService,
   ) {}
 
@@ -27,18 +33,44 @@ export class EventsService {
     if (!fullUser) throw new NotFoundException('Usuário não encontrado.');
 
     const isAdmin = fullUser.role === UserRole.ADMIN;
-    const event = this.eventRepository.create({
+
+    // 1. Prepara os dados do evento
+    const eventData = {
       ...dto,
       creator: fullUser,
       status: isAdmin ? EventStatus.APPROVED : EventStatus.PENDING,
       participants: [],
       checkedInUserIds: [],
-    });
+    };
 
-    return this.eventRepository.save(event);
+    // 2. Cria a instância e salva forçando a tipagem com "as unknown as Event"
+    const newEvent = this.eventRepository.create(eventData);
+    let savedEvent = (await this.eventRepository.save(
+      newEvent,
+    )) as unknown as Event;
+
+    // 3. CRIA O CHAT VINCULADO AO EVENTO
+    const chat = this.chatRepository.create({
+      type: ChatType.EVENT,
+      name: savedEvent.title,
+      imageUrl: savedEvent.bannerUrl,
+      createdByUserId: fullUser.id,
+    });
+    const savedChat = await this.chatRepository.save(chat);
+
+    // 4. Adiciona o Criador como Admin do Chat do Evento
+    const member = this.chatMemberRepository.create({
+      chatId: savedChat.id,
+      userId: fullUser.id,
+      role: ChatMemberRole.ADMIN,
+    });
+    await this.chatMemberRepository.save(member);
+
+    // 5. Salva o chatId de volta no evento
+    savedEvent.chatId = savedChat.id;
+    return this.eventRepository.save(savedEvent);
   }
 
-  // Novo método para Admin: Lista tudo exceto REPROVED (cancelados)
   async findAllForAdmin() {
     return this.eventRepository.find({
       where: { status: Not(EventStatus.REPROVED) },
@@ -47,7 +79,6 @@ export class EventsService {
     });
   }
 
-  // Atualização com lógica de permissão e status
   async update(id: string, dto: any, reqUser: any) {
     const event = await this.eventRepository.findOne({
       where: { id },
@@ -56,14 +87,12 @@ export class EventsService {
 
     if (!event) throw new NotFoundException('Evento não encontrado');
 
-    // Se não for admin, verifica se é o dono
     if (reqUser.role !== UserRole.ADMIN) {
       if (event.creator.id !== reqUser.userId) {
         throw new ForbiddenException(
           'Você só pode editar seus próprios eventos.',
         );
       }
-      // Se um usuário edita, volta para PENDING para nova análise
       event.status = EventStatus.PENDING;
     }
 
@@ -86,8 +115,27 @@ export class EventsService {
 
     if (isParticipating) {
       event.participants = event.participants.filter((p) => p.id !== userId);
+      if (event.chatId) {
+        await this.chatMemberRepository.delete({
+          chatId: event.chatId,
+          userId,
+        });
+      }
     } else {
       event.participants.push(user);
+      if (event.chatId) {
+        const existingMember = await this.chatMemberRepository.findOne({
+          where: { chatId: event.chatId, userId },
+        });
+        if (!existingMember) {
+          const newMember = this.chatMemberRepository.create({
+            chatId: event.chatId,
+            userId: userId,
+            role: ChatMemberRole.MEMBER,
+          });
+          await this.chatMemberRepository.save(newMember);
+        }
+      }
     }
 
     return this.eventRepository.save(event);
@@ -196,7 +244,6 @@ export class EventsService {
 
     if (!event) throw new NotFoundException('Evento não encontrado');
 
-    // Admin deleta qualquer um; Usuário cancela o próprio (muda status para REPROVED)
     if (reqUser.role === UserRole.ADMIN) {
       return this.eventRepository.remove(event);
     } else {

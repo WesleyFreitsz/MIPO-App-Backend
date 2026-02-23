@@ -36,6 +36,8 @@ import { Game } from './games/entities/game.entity';
 import { Room } from './rooms/entities/room.entity';
 import { Transaction } from './finance/entities/transaction.entity';
 import { UploadsController } from './uploads/uploads.controller';
+import { ReportsModule } from './reports/reports.module';
+import { Report } from './reports/entities/report.entity';
 
 @Module({
   imports: [
@@ -43,7 +45,6 @@ import { UploadsController } from './uploads/uploads.controller';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DIRECT_URL,
-      // CORREÇÃO 3: Passar as classes importadas aqui
       entities: [
         User,
         Event,
@@ -60,6 +61,7 @@ import { UploadsController } from './uploads/uploads.controller';
         Game,
         Room,
         Transaction,
+        Report,
       ],
       synchronize: true,
       ssl: {
@@ -98,6 +100,7 @@ import { UploadsController } from './uploads/uploads.controller';
     GamesModule,
     RoomsModule,
     FinanceModule,
+    ReportsModule,
   ],
   controllers: [UploadsController],
 })

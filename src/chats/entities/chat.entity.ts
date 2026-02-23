@@ -12,6 +12,7 @@ import { ChatMessage } from './chat-message.entity';
 export enum ChatType {
   PRIVATE = 'PRIVATE',
   GROUP = 'GROUP',
+  EVENT = 'EVENT', 
 }
 
 @Entity('chats')

@@ -38,6 +38,9 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   city: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  bio: string | null;
+
   @Column({ type: 'varchar', nullable: true })
   avatarUrl: string | null;
 

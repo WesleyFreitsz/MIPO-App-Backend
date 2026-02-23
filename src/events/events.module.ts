@@ -5,10 +5,12 @@ import { EventsController } from './events.controller';
 import { Event } from './entities/event.entity';
 import { User } from 'src/users/entities/user.entity'; // <--- Importe o User
 import { NotificationsModule } from 'src/notifications/notifications.module';
+import { ChatMember } from 'src/chats/entities/chat-member.entity';
+import { Chat } from 'src/chats/entities/chat.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Event, User]), // <--- Adicione User aqui
+    TypeOrmModule.forFeature([Event, User, Chat, ChatMember]),
     NotificationsModule,
   ],
   controllers: [EventsController],

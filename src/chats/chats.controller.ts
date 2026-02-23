@@ -8,6 +8,7 @@ import {
   UseGuards,
   Request,
   Query,
+  Patch,
 } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt.guard';
 import { ChatsService } from './chats.service';
@@ -24,6 +25,15 @@ export class ChatsController {
    * Criar novo chat em grupo
    * POST /chats/group
    */
+  @Patch(':id')
+  async updateChatDetails(
+    @Request() req,
+    @Param('id') chatId: string,
+    @Body() dto: { name?: string; description?: string; imageUrl?: string },
+  ) {
+    return this.chatsService.updateChatDetails(chatId, req.user.userId, dto);
+  }
+
   @Post('group')
   async createGroupChat(@Request() req, @Body() dto: CreateChatDto) {
     return this.chatsService.createChat(req.user.userId, dto);
