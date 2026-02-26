@@ -139,13 +139,21 @@ export class NotificationsService {
   }
 
   async broadcast(title: string, message: string, icon?: string) {
-    const notification = this.notifRepository.create({
-      title,
-      message,
-      icon,
-      user: null,
-    });
-    await this.notifRepository.save(notification);
+    // Busca todos os usuários
+    const users = await this.userRepository.find();
+
+    // Cria uma notificação individual no banco para cada usuário
+    const dbPromises = users.map((user) =>
+      this.notifRepository.save(
+        this.notifRepository.create({
+          title,
+          message,
+          icon,
+          user, // Agora a notificação pertence ao usuário específico
+        }),
+      ),
+    );
+    await Promise.all(dbPromises);
 
     this.notificationsGateway.broadcast({
       title,
@@ -153,20 +161,15 @@ export class NotificationsService {
       type: 'GLOBAL_ALERT',
     });
 
-    const usersWithToken = await this.userRepository
-      .createQueryBuilder('user')
-      .where('user.notificationToken IS NOT NULL')
-      .select(['user.notificationToken'])
-      .getMany();
-
-    const tokens = usersWithToken
+    const tokens = users
       .map((u) => u.notificationToken)
       .filter((t): t is string => !!t);
+
     if (tokens.length > 0) {
       await this.sendPush(tokens, title, message);
     }
 
-    return notification;
+    return { message: 'Notificação global enviada a todos com sucesso' };
   }
 
   async getUserNotifications(userId: string, skip = 0, take = 20) {

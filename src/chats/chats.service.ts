@@ -87,13 +87,25 @@ export class ChatsService {
       .take(take)
       .getManyAndCount();
 
-    // Mapeamos para garantir que o formato do frontend não quebre
     const chatsWithDetails = chats.map((chat) => {
+      let unreadCount = 0;
+
+      const myMember = chat.members?.find((m) => m.userId === userId);
+
+      if (chat.lastMessage && myMember) {
+        const lastMsgTime = new Date(chat.lastMessage.createdAt).getTime();
+        const lastReadTime = myMember.lastReadAt
+          ? new Date(myMember.lastReadAt).getTime()
+          : 0;
+
+        if (lastMsgTime > lastReadTime) {
+          unreadCount = 1;
+        }
+      }
+
       return {
         ...chat,
-        // O unreadCount é mantido em 0 na listagem principal para não pesar a query.
-        // O frontend usa a lógica de bolinha verificando lastReadAt vs lastMessage.createdAt
-        unreadCount: 0,
+        unreadCount, // Agora passa 1 se tiver mensagem nova, ativando a bolinha no app
       };
     });
 
@@ -105,7 +117,6 @@ export class ChatsService {
       hasMore: total > skip + take,
     };
   }
-
   /**
    * Adicionar membros a um chat (Apenas Admin do Grupo)
    */
