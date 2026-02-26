@@ -32,6 +32,11 @@ export class NotificationsController {
     return { message: 'Notificação lida' };
   }
 
+  @Patch('read-all')
+  async markAllAsRead(@Request() req) {
+    return this.notifService.markAllAsRead(req.user.userId);
+  }
+  
   // (ADMIN) Enviar notificação para todos manualmente
   @Post('admin-broadcast')
   async manualBroadcast(

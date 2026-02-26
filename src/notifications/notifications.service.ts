@@ -190,4 +190,12 @@ export class NotificationsService {
     await this.notifRepository.update(id, { isRead: true });
     return { message: 'Lida' };
   }
+
+  async markAllAsRead(userId: string) {
+    await this.notifRepository.update(
+      { user: { id: userId } },
+      { isRead: true },
+    );
+    return { message: 'Todas as notificações foram lidas' };
+  }
 }
