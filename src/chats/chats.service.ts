@@ -77,9 +77,20 @@ export class ChatsService {
   async getUserChats(userId: string, skip = 0, take = 10) {
     const [chats, total] = await this.chatRepository
       .createQueryBuilder('chat')
-      .innerJoin('chat.members', 'member', 'member.userId = :userId', {
-        userId,
-      })
+      // 1. Filtra para trazer apenas os chats onde o usuário logado está
+      .innerJoin(
+        'chat.members',
+        'filterMember',
+        'filterMember.userId = :userId',
+        {
+          userId,
+        },
+      )
+      // 2. CORREÇÃO: Carrega a lista completa de membros do chat
+      .leftJoinAndSelect('chat.members', 'member')
+      // 3. CORREÇÃO: Carrega os dados de usuário (nome, foto) de cada membro
+      .leftJoinAndSelect('member.user', 'user')
+      // 4. Carrega a última mensagem
       .leftJoinAndSelect('chat.lastMessage', 'lastMessage')
       .leftJoinAndSelect('lastMessage.user', 'messageUser')
       .orderBy('chat.updatedAt', 'DESC')
@@ -90,6 +101,7 @@ export class ChatsService {
     const chatsWithDetails = chats.map((chat) => {
       let unreadCount = 0;
 
+      // Agora "chat.members" existe, então ele vai encontrar o seu membro corretamente!
       const myMember = chat.members?.find((m) => m.userId === userId);
 
       if (chat.lastMessage && myMember) {
@@ -98,14 +110,15 @@ export class ChatsService {
           ? new Date(myMember.lastReadAt).getTime()
           : 0;
 
-        if (lastMsgTime > lastReadTime) {
+        // Verifica se a mensagem é nova e se NÃO foi enviada por você mesmo
+        if (lastMsgTime > lastReadTime && chat.lastMessage.userId !== userId) {
           unreadCount = 1;
         }
       }
 
       return {
         ...chat,
-        unreadCount, // Agora passa 1 se tiver mensagem nova, ativando a bolinha no app
+        unreadCount,
       };
     });
 
