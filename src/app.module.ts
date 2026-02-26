@@ -63,7 +63,7 @@ import { Report } from './reports/entities/report.entity';
         Transaction,
         Report,
       ],
-      synchronize: true,
+      synchronize: false,
       ssl: {
         rejectUnauthorized: false,
       },
