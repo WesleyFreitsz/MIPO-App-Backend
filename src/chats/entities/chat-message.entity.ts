@@ -6,18 +6,22 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { Chat } from './chat.entity';
 
 @Entity('chat_messages')
+@Index(['chatId', 'createdAt']) 
 export class ChatMessage {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Index()
   @Column('uuid')
   chatId: string;
 
+  @Index()
   @Column('uuid')
   userId: string;
 
@@ -36,12 +40,12 @@ export class ChatMessage {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  // Relacionamentos
   @ManyToOne(() => Chat, (chat) => chat.messages, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'chatId' })
   chat: Chat;
 
-  @ManyToOne(() => User, { eager: true })
+  // 🚨 CORREÇÃO: Removido eager: true para não pesar o banco
+  @ManyToOne(() => User, { eager: false })
   @JoinColumn({ name: 'userId' })
   user: User;
 }

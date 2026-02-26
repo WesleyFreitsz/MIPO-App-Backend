@@ -12,6 +12,7 @@ import { CreatePostDto } from './dto/create-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../users/entities/user.entity';
+import { NotificationsGateway } from '../notifications/notifications.gateway'; // Importado para Real-time
 
 @Injectable()
 export class PostsService {
@@ -22,7 +23,8 @@ export class PostsService {
     private commentRepository: Repository<PostComment>,
     @InjectRepository(PostLike)
     private likeRepository: Repository<PostLike>,
-    private notificationsService: NotificationsService, // Notificações injetadas
+    private notificationsService: NotificationsService,
+    private notificationsGateway: NotificationsGateway, // Injetado para emitir eventos de socket
   ) {}
 
   async createPost(userId: string, dto: CreatePostDto) {
@@ -113,7 +115,11 @@ export class PostsService {
   }
 
   async likePost(postId: string, userId: string) {
-    const post = await this.postRepository.findOne({ where: { id: postId } });
+    const post = await this.postRepository.findOne({
+      where: { id: postId },
+      relations: ['likes'], // Necessário para contar os likes atualizados
+    });
+
     if (!post) throw new NotFoundException('Post não encontrado');
 
     const existingLike = await this.likeRepository.findOne({
@@ -125,7 +131,15 @@ export class PostsService {
     const like = this.likeRepository.create({ postId, userId });
     await this.likeRepository.save(like);
 
-    // NOTIFICAÇÃO DE LIKE (Trava para não notificar a si mesmo)
+    // --- LÓGICA EM TEMPO REAL ---
+    // Emite um evento global para que todos os fronts atualizem o contador de likes desse post
+    this.notificationsGateway.broadcast({
+      type: 'POST_LIKE_UPDATE',
+      postId: postId,
+      likeCount: (post.likes?.length || 0) + 1,
+    });
+
+    // Notificação Push para o dono do post
     if (post.userId !== userId) {
       const liker = await this.postRepository.manager.findOne(User, {
         where: { id: userId },
@@ -149,6 +163,21 @@ export class PostsService {
     if (!like) throw new NotFoundException('Like não encontrado');
 
     await this.likeRepository.remove(like);
+
+    // --- LÓGICA EM TEMPO REAL ---
+    const post = await this.postRepository.findOne({
+      where: { id: postId },
+      relations: ['likes'],
+    });
+
+    if (post) {
+      this.notificationsGateway.broadcast({
+        type: 'POST_LIKE_UPDATE',
+        postId: postId,
+        likeCount: post.likes?.length || 0,
+      });
+    }
+
     return { message: 'Like removido com sucesso' };
   }
 
@@ -159,7 +188,6 @@ export class PostsService {
     const comment = this.commentRepository.create({ postId, userId, ...dto });
     await this.commentRepository.save(comment);
 
-    // NOTIFICAÇÃO DE COMENTÁRIO (Trava para não notificar a si mesmo)
     if (post.userId !== userId) {
       const commenter = await this.postRepository.manager.findOne(User, {
         where: { id: userId },

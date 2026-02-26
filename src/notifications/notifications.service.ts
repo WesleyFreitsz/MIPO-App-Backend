@@ -10,6 +10,9 @@ import { NotificationsGateway } from './notifications.gateway';
 export class NotificationsService {
   private expo = new Expo();
 
+  // Limite máximo de notificações mantidas por utilizador no banco de dados
+  private readonly MAX_NOTIFICATIONS = 50;
+
   constructor(
     @InjectRepository(Notifications)
     private notifRepository: Repository<Notifications>,
@@ -65,7 +68,6 @@ export class NotificationsService {
     });
     await this.notifRepository.save(notification);
 
-    // Emite o alerta em TEMPO REAL pelo WebSocket
     this.notificationsGateway.sendRealTimeNotification(userId, {
       title,
       message,
@@ -76,7 +78,27 @@ export class NotificationsService {
       await this.sendPush(user.notificationToken, title, message);
     }
 
+    await this.pruneOldNotifications(userId);
+
     return notification;
+  }
+
+  private async pruneOldNotifications(userId: string) {
+    const notifications = await this.notifRepository.find({
+      where: { user: { id: userId } },
+      order: { createdAt: 'DESC' },
+      select: ['id'],
+    });
+
+    if (notifications.length > this.MAX_NOTIFICATIONS) {
+      const idsToDelete = notifications
+        .slice(this.MAX_NOTIFICATIONS)
+        .map((n) => n.id);
+
+      if (idsToDelete.length > 0) {
+        await this.notifRepository.delete(idsToDelete);
+      }
+    }
   }
 
   async notifyAdmins(title: string, message: string) {
@@ -96,7 +118,6 @@ export class NotificationsService {
     );
     await Promise.all(dbPromises);
 
-    // Envia alerta em tempo real para os admins online
     admins.forEach((admin) => {
       this.notificationsGateway.sendRealTimeNotification(admin.id, {
         title,
@@ -104,6 +125,10 @@ export class NotificationsService {
         type: 'ADMIN_ALERT',
       });
     });
+
+    await Promise.all(
+      admins.map((admin) => this.pruneOldNotifications(admin.id)),
+    );
 
     const tokens = admins
       .map((a) => a.notificationToken)
@@ -122,7 +147,6 @@ export class NotificationsService {
     });
     await this.notifRepository.save(notification);
 
-    // Dispara via WebSocket para TODOS os usuários conectados
     this.notificationsGateway.broadcast({
       title,
       message,
@@ -145,11 +169,21 @@ export class NotificationsService {
     return notification;
   }
 
-  async getUserNotifications(userId: string) {
-    return this.notifRepository.find({
+  async getUserNotifications(userId: string, skip = 0, take = 20) {
+    const [data, total] = await this.notifRepository.findAndCount({
       where: [{ user: { id: userId } }, { user: IsNull() }],
       order: { createdAt: 'DESC' },
+      skip,
+      take,
     });
+
+    return {
+      data,
+      total,
+      skip,
+      take,
+      hasMore: total > skip + take,
+    };
   }
 
   async markAsRead(id: string) {

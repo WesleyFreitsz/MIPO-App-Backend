@@ -5,79 +5,98 @@ import {
   UseInterceptors,
   BadRequestException,
   UseGuards,
-  Get,
-  Param,
-  Res,
-  NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { AuthGuard } from '@nestjs/passport'; // Usando AuthGuard direto para evitar bugs de import
-import { diskStorage } from 'multer';
-import { extname, join } from 'path';
-import express from 'express';
-import * as fs from 'fs';
+import { AuthGuard } from '@nestjs/passport';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Garante que a pasta de vídeos exista no servidor
-const videoUploadDir = join(process.cwd(), 'uploads', 'videos');
-if (!fs.existsSync(videoUploadDir)) {
-  fs.mkdirSync(videoUploadDir, { recursive: true });
-}
+const BUCKET_NAME = 'mipo-bucket';
 
 @Controller('uploads')
 export class UploadsController {
-  // UPLOAD DE IMAGEM (Base64) - Mantido igual
+  private supabase: SupabaseClient;
+
+  constructor() {
+    // 🚀 Inicializa DENTRO do construtor para garantir que o .env já foi carregado!
+    this.supabase = createClient(
+      process.env.SUPABASE_URL as string,
+      process.env.SUPABASE_KEY as string,
+    );
+  }
+
+  /**
+   * UPLOAD DE AVATAR / IMAGENS
+   */
   @UseGuards(AuthGuard('jwt'))
   @Post('avatar')
   @UseInterceptors(FileInterceptor('file'))
-  uploadAvatar(@UploadedFile() file: any) {
+  async uploadAvatar(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new BadRequestException('Nenhum arquivo foi enviado');
     }
 
-    const base64Image = file.buffer.toString('base64');
-    const mimeType = file.mimetype || 'image/jpeg';
-    const url = `data:${mimeType};base64,${base64Image}`;
+    const fileName = `avatars/${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
 
-    return { url };
+    // Usando this.supabase
+    const { error } = await this.supabase.storage
+      .from(BUCKET_NAME)
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true,
+      });
+
+    if (error) {
+      throw new BadRequestException(`Erro no upload: ${error.message}`);
+    }
+
+    const {
+      data: { publicUrl },
+    } = this.supabase.storage.from(BUCKET_NAME).getPublicUrl(fileName);
+
+    return { url: publicUrl };
   }
 
-  // UPLOAD DE VÍDEO (Salvo no Servidor)
+  /**
+   * UPLOAD DE CONTEÚDO DE CHAT (VÍDEOS E IMAGENS)
+   */
+  @UseGuards(AuthGuard('jwt'))
+  @Post('chat-content')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadChatContent(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('Nenhum arquivo foi enviado');
+    }
+
+    const isVideo = file.mimetype.includes('video');
+    const folder = isVideo ? 'videos' : 'chat-images';
+    const fileName = `${folder}/${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
+
+    // Usando this.supabase
+    const { error } = await this.supabase.storage
+      .from(BUCKET_NAME)
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true,
+      });
+
+    if (error) {
+      throw new BadRequestException(`Erro no upload: ${error.message}`);
+    }
+
+    const {
+      data: { publicUrl },
+    } = this.supabase.storage.from(BUCKET_NAME).getPublicUrl(fileName);
+
+    return { url: publicUrl };
+  }
+
+  /**
+   * Rota antiga "video" mantida para compatibilidade
+   */
   @UseGuards(AuthGuard('jwt'))
   @Post('video')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: videoUploadDir,
-        filename: (req, file, cb) => {
-          // Cria um nome único para o vídeo (ex: video-16984...123.mp4)
-          const uniqueSuffix =
-            Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `video-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
-  uploadVideo(@UploadedFile() file: any) {
-    if (!file) {
-      throw new BadRequestException('Nenhum vídeo foi enviado');
-    }
-
-    console.log('[UPLOAD] Vídeo salvo em disco:', file.filename);
-
-    // Retorna a URL interna para acessar o vídeo depois
-    return { url: `/uploads/video/${file.filename}` };
-  }
-
-  // ROTA PARA ACESSAR O VÍDEO NO APLICATIVO (Não precisa de AuthGuard para o Player conseguir ler direto)
-  @Get('video/:filename')
-  getVideo(@Param('filename') filename: string, @Res() res: express.Response) {
-    const filePath = join(videoUploadDir, filename);
-
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException('Vídeo não encontrado');
-    }
-
-    // Retorna o arquivo de vídeo como Stream para o Frontend
-    return res.sendFile(filePath);
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadVideo(@UploadedFile() file: Express.Multer.File) {
+    return this.uploadChatContent(file);
   }
 }

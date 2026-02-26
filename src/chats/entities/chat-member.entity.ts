@@ -1,4 +1,3 @@
-// src/chats/entities/chat-member.entity.ts
 import {
   Entity,
   Column,
@@ -7,6 +6,7 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { Chat } from './chat.entity';
@@ -17,6 +17,8 @@ export enum ChatMemberRole {
 }
 
 @Entity('chat_members')
+@Index(['userId', 'chatId']) 
+@Index(['chatId'])
 export class ChatMember {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -47,7 +49,8 @@ export class ChatMember {
   @JoinColumn({ name: 'chatId' })
   chat: Chat;
 
-  @ManyToOne(() => User, { eager: true })
+  // Eager removido para evitar carregar dados do usuário desnecessariamente em massa
+  @ManyToOne(() => User, { eager: false })
   @JoinColumn({ name: 'userId' })
   user: User;
 }

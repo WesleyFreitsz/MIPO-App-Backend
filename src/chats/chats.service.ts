@@ -61,7 +61,7 @@ export class ChatsService {
   async getChatDetails(chatId: string) {
     const chat = await this.chatRepository.findOne({
       where: { id: chatId },
-      relations: ['members', 'members.user', 'messages', 'messages.user'],
+      relations: ['members', 'members.user'],
     });
 
     if (!chat) {
@@ -72,38 +72,38 @@ export class ChatsService {
   }
 
   /**
-   * Listar todos os chats do usuário (Privados, Grupos e Eventos)
+   * Listar todos os chats do usuário com paginação otimizada (10 por vez)
    */
-  async getUserChats(userId: string, skip = 0, take = 20) {
+  async getUserChats(userId: string, skip = 0, take = 10) {
     const [chats, total] = await this.chatRepository
       .createQueryBuilder('chat')
-      .innerJoinAndSelect('chat.members', 'member', 'member.userId = :userId', {
+      .innerJoin('chat.members', 'member', 'member.userId = :userId', {
         userId,
       })
-      .leftJoinAndSelect('chat.messages', 'message')
-      .leftJoinAndSelect('message.user', 'messageUser')
-      .leftJoinAndSelect('chat.members', 'allMembers')
-      .leftJoinAndSelect('allMembers.user', 'memberUser')
-      .orderBy('message.createdAt', 'DESC')
-      .addOrderBy('chat.createdAt', 'DESC')
+      .leftJoinAndSelect('chat.lastMessage', 'lastMessage')
+      .leftJoinAndSelect('lastMessage.user', 'messageUser')
+      .orderBy('chat.updatedAt', 'DESC')
       .skip(skip)
       .take(take)
       .getManyAndCount();
 
+    // Mapeamos para garantir que o formato do frontend não quebre
     const chatsWithDetails = chats.map((chat) => {
-      const lastMessage = chat.messages?.[0];
-      const unreadCount =
-        chat.messages?.filter((m) => !m.isRead && m.userId !== userId).length ||
-        0;
-
       return {
         ...chat,
-        lastMessage,
-        unreadCount,
+        // O unreadCount é mantido em 0 na listagem principal para não pesar a query.
+        // O frontend usa a lógica de bolinha verificando lastReadAt vs lastMessage.createdAt
+        unreadCount: 0,
       };
     });
 
-    return { data: chatsWithDetails, total, skip, take };
+    return {
+      data: chatsWithDetails,
+      total,
+      skip,
+      take,
+      hasMore: total > skip + take,
+    };
   }
 
   /**
@@ -126,7 +126,7 @@ export class ChatsService {
       );
     }
 
-    // 🚀 PREVENÇÃO DE DUPLICATAS: Filtra amigos que já estão no chat
+    // Filtra amigos que já estão no chat para não dar conflito
     const existingMemberIds = chat.members.map((m) => m.userId);
     const newMembersIds = dto.memberIds.filter(
       (id) => !existingMemberIds.includes(id),
@@ -210,19 +210,14 @@ export class ChatsService {
   }
 
   /**
-   * Enviar mensagem
+   * Enviar mensagem e atualizar a última mensagem no Chat (Performance Maximizada)
    */
   async sendMessage(chatId: string, userId: string, dto: SendMessageDto) {
-    const chat = await this.chatRepository.findOne({
-      where: { id: chatId },
-      relations: ['members'],
+    // Valida diretamente no banco para poupar memória (evita carregar arrays gigantes)
+    const isMember = await this.memberRepository.findOne({
+      where: { chatId, userId },
     });
 
-    if (!chat) {
-      throw new NotFoundException('Chat não encontrado');
-    }
-
-    const isMember = chat.members?.some((m) => m.userId === userId);
     if (!isMember) {
       throw new ForbiddenException('Você não é membro deste chat');
     }
@@ -233,30 +228,36 @@ export class ChatsService {
       ...dto,
     });
 
-    return this.messageRepository.save(message);
+    const savedMessage = await this.messageRepository.save(message);
+
+    // Atualiza o chat apontando para essa nova mensagem (elimina a subquery de listagem)
+    await this.chatRepository.update(chatId, {
+      lastMessageId: savedMessage.id,
+      updatedAt: new Date(),
+    });
+
+    return savedMessage;
   }
 
   /**
-   * Listar mensagens de um chat
+   * Listar mensagens de um chat com paginação (15 por vez)
    */
-  async getMessages(chatId: string, skip = 0, take = 50) {
-    const chat = await this.chatRepository.findOne({
-      where: { id: chatId },
-    });
-
-    if (!chat) {
-      throw new NotFoundException('Chat não encontrado');
-    }
-
+  async getMessages(chatId: string, skip = 0, take = 15) {
     const [messages, total] = await this.messageRepository.findAndCount({
       where: { chatId },
-      relations: ['user'],
-      order: { createdAt: 'ASC' },
+      relations: ['user'], // Carrega só o usuário dono da mensagem
+      order: { createdAt: 'DESC' }, // Mais recentes primeiro para a query ser rápida
       skip,
       take,
     });
 
-    return { data: messages, total, skip, take };
+    return {
+      data: messages.reverse(), // Reverte no backend para a tela fluir do jeito correto
+      total,
+      skip,
+      take,
+      hasMore: total > skip + take,
+    };
   }
 
   /**
@@ -277,7 +278,7 @@ export class ChatsService {
   }
 
   /**
-   * Criar chat privado entre dois usuários
+   * Criar chat privado entre dois usuários de forma otimizada
    */
   async createPrivateChat(userId: string, targetUserId: string) {
     const user = await this.userRepository.findOne({
@@ -291,18 +292,12 @@ export class ChatsService {
     const existingChat = await this.chatRepository
       .createQueryBuilder('chat')
       .where('chat.type = :type', { type: ChatType.PRIVATE })
-      .innerJoinAndSelect(
-        'chat.members',
-        'member1',
-        'member1.userId = :userId',
-        { userId },
-      )
-      .innerJoinAndSelect(
-        'chat.members',
-        'member2',
-        'member2.userId = :targetUserId',
-        { targetUserId },
-      )
+      .innerJoin('chat.members', 'member1', 'member1.userId = :userId', {
+        userId,
+      })
+      .innerJoin('chat.members', 'member2', 'member2.userId = :targetUserId', {
+        targetUserId,
+      })
       .getOne();
 
     if (existingChat) {
@@ -355,6 +350,9 @@ export class ChatsService {
     return { message: 'Chat deletado com sucesso' };
   }
 
+  /**
+   * Atualizar detalhes do chat
+   */
   async updateChatDetails(
     chatId: string,
     userId: string,
@@ -379,10 +377,12 @@ export class ChatsService {
     await this.chatRepository.save(chat);
     return this.getChatDetails(chatId);
   }
+
   /**
-   * Sair de um chat
+   * Sair de um chat (Com as lógicas adicionais implementadas)
    */
   async leaveChat(chatId: string, userId: string) {
+    // 1. Encontra o membro atual que quer sair
     const member = await this.memberRepository.findOne({
       where: { chatId, userId },
     });
@@ -391,7 +391,42 @@ export class ChatsService {
       throw new NotFoundException('Você não é membro deste chat');
     }
 
+    // Salva a informação se quem está saindo era um ADMIN
+    const wasAdmin = member.role === ChatMemberRole.ADMIN;
+
+    // 2. Remove o membro do chat
     await this.memberRepository.remove(member);
+
+    // 3. Busca quem sobrou no chat ordenando do mais antigo para o mais novo
+    const remainingMembers = await this.memberRepository.find({
+      where: { chatId },
+      order: { joinedAt: 'ASC' }, // ASC garante que [0] é o que entrou primeiro (mais antigo)
+    });
+
+    // 4. Se a lista estiver vazia, apaga o chat totalmente do banco
+    if (remainingMembers.length === 0) {
+      const chat = await this.chatRepository.findOne({ where: { id: chatId } });
+      if (chat) {
+        await this.chatRepository.remove(chat);
+      }
+      return {
+        message:
+          'Você saiu do chat. O grupo foi apagado pois não havia mais ninguém.',
+      };
+    }
+
+    if (wasAdmin) {
+      const hasAdminLeft = remainingMembers.some(
+        (m) => m.role === ChatMemberRole.ADMIN,
+      );
+
+      if (!hasAdminLeft) {
+        const oldestMember = remainingMembers[0];
+        oldestMember.role = ChatMemberRole.ADMIN;
+        await this.memberRepository.save(oldestMember);
+      }
+    }
+
     return { message: 'Você saiu do chat com sucesso' };
   }
 }

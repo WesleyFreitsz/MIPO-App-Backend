@@ -5,6 +5,8 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { ChatMember } from './chat-member.entity';
 import { ChatMessage } from './chat-message.entity';
@@ -12,7 +14,7 @@ import { ChatMessage } from './chat-message.entity';
 export enum ChatType {
   PRIVATE = 'PRIVATE',
   GROUP = 'GROUP',
-  EVENT = 'EVENT', 
+  EVENT = 'EVENT',
 }
 
 @Entity('chats')
@@ -20,11 +22,7 @@ export class Chat {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({
-    type: 'enum',
-    enum: ChatType,
-    default: ChatType.PRIVATE,
-  })
+  @Column({ type: 'enum', enum: ChatType, default: ChatType.PRIVATE })
   type: ChatType;
 
   @Column({ type: 'varchar' })
@@ -39,13 +37,20 @@ export class Chat {
   @Column('uuid')
   createdByUserId: string;
 
+  // 🚀 NOVO: Armazena o ID da última mensagem para evitar subqueries pesadas
+  @Column({ nullable: true })
+  lastMessageId: string;
+
+  @ManyToOne(() => ChatMessage, { nullable: true })
+  @JoinColumn({ name: 'lastMessageId' })
+  lastMessage: ChatMessage;
+
   @CreateDateColumn()
   createdAt: Date;
 
   @UpdateDateColumn()
   updatedAt: Date;
 
-  // Relacionamentos
   @OneToMany(() => ChatMember, (member) => member.chat)
   members: ChatMember[];
 
