@@ -9,6 +9,7 @@ import {
   UseGuards,
   Request,
   Query,
+  Patch,
 } from '@nestjs/common';
 import { PostsService } from './posts.service';
 import { CreatePostDto } from './dto/create-post.dto';
@@ -69,7 +70,7 @@ export class PostsController {
    * Atualizar post
    * PUT /posts/:id
    */
-  @Put(':id')
+  @Patch(':id') // Alterado de @Put para @Patch para maior compatibilidade
   async updatePost(
     @Request() req,
     @Param('id') postId: string,
