@@ -67,6 +67,8 @@ export class UsersService {
       skip,
       take,
       order: { name: 'ASC' },
+      // Relações adicionadas aqui para o AdminAchievementsScreen funcionar corretamente:
+      relations: ['achievements', 'achievements.achievement'],
     });
     const result = users.map((u) => {
       const { password, ...rest } = u;

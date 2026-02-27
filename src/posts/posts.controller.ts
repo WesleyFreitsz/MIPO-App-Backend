@@ -57,10 +57,20 @@ export class PostsController {
     return this.postsService.getUserPosts(userId, skip, take);
   }
 
-  /**
-   * Obter um post específico
-   * GET /posts/:id
-   */
+  @Patch('comments/:id')
+  async updateComment(
+    @Param('id') id: string,
+    @Request() req,
+    @Body('content') content: string,
+  ) {
+    return this.postsService.updateComment(id, req.user.userId, content);
+  }
+
+  @Delete('comments/:id')
+  async deleteComment(@Request() req, @Param('id') commentId: string) {
+    return this.postsService.deleteComment(commentId, req.user.userId);
+  }
+ 
   @Get(':id')
   async getPost(@Request() req, @Param('id') postId: string) {
     return this.postsService.getPost(postId, req.user.userId);
@@ -131,14 +141,5 @@ export class PostsController {
     @Query('take') take = 20,
   ) {
     return this.postsService.getPostComments(postId, skip, take);
-  }
-
-  /**
-   * Deletar comentário
-   * DELETE /comments/:id
-   */
-  @Delete('comments/:id')
-  async deleteComment(@Request() req, @Param('id') commentId: string) {
-    return this.postsService.deleteComment(commentId, req.user.userId);
   }
 }

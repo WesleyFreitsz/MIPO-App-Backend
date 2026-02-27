@@ -12,10 +12,16 @@ import { User } from '../../users/entities/user.entity';
 import { Chat } from './chat.entity';
 
 @Entity('chat_messages')
-@Index(['chatId', 'createdAt']) 
+@Index(['chatId', 'createdAt'])
 export class ChatMessage {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  @Column({ default: false })
+  isEdited: boolean;
+
+  @Column({ default: false })
+  isDeleted: boolean;
 
   @Index()
   @Column('uuid')

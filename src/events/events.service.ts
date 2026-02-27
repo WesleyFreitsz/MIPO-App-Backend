@@ -14,15 +14,22 @@ import {
   ChatMember,
   ChatMemberRole,
 } from 'src/chats/entities/chat-member.entity';
+import { AchievementsService } from 'src/achievements/achievements.service';
+import { Achievement } from 'src/achievements/entities/achievement.entity';
 
 @Injectable()
+
 export class EventsService {
   constructor(
     @InjectRepository(Event) private eventRepository: Repository<Event>,
     @InjectRepository(User) private userRepository: Repository<User>,
-    @InjectRepository(Chat) private chatRepository: Repository<Chat>, // ADICIONADO AQUI
+    @InjectRepository(Chat) private chatRepository: Repository<Chat>,
+    // CORREÇÃO: Cada repositório deve ter seu próprio decorador na frente da variável
+    @InjectRepository(Achievement)
+    private achievementRepository: Repository<Achievement>,
     @InjectRepository(ChatMember)
     private chatMemberRepository: Repository<ChatMember>,
+    private achievementsService: AchievementsService,
     private notifService: NotificationsService,
   ) {}
 
@@ -161,14 +168,38 @@ export class EventsService {
     }
 
     event.checkedInUserIds.push(userId);
+    await this.eventRepository.save(event);
 
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (user) {
-      user.participation += 1;
+      user.participation = (user.participation || 0) + 1;
       await this.userRepository.save(user);
+
+      // 1. Gatilho por quantidade total acumulada: evento.checkin.X
+      await this.achievementsService.checkAndAwardByCondition(
+        userId,
+        'evento.checkin',
+        user.participation,
+      );
     }
 
-    return this.eventRepository.save(event);
+    // 2. Conquista específica vinculada a este evento (ID único)
+    try {
+      const linkedAchievement = await this.achievementRepository.findOne({
+        where: { linkedEvent: { id: eventId } },
+      });
+
+      if (linkedAchievement) {
+        await this.achievementsService.awardToUsers(
+          [userId],
+          linkedAchievement.id,
+        );
+      }
+    } catch (error) {
+      console.error('Erro ao processar conquista de evento:', error);
+    }
+
+    return { message: 'Check-in realizado com sucesso.' };
   }
 
   async findAllApproved() {
@@ -178,25 +209,6 @@ export class EventsService {
       order: { dateTime: 'ASC' },
       relations: ['creator', 'participants'],
     });
-  }
-
-  private async autoUpdateConcludedEvents() {
-    const now = new Date();
-    const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-
-    const expiredEvents = await this.eventRepository.find({
-      where: {
-        status: EventStatus.APPROVED,
-        dateTime: LessThan(sixHoursAgo),
-      },
-    });
-
-    if (expiredEvents.length > 0) {
-      expiredEvents.forEach((event) => {
-        event.status = EventStatus.CONCLUDED;
-      });
-      await this.eventRepository.save(expiredEvents);
-    }
   }
 
   async findPending() {
@@ -216,12 +228,43 @@ export class EventsService {
 
     event.status = EventStatus.APPROVED;
     await this.eventRepository.save(event);
+
     await this.notifService.broadcast(
       'Novo Evento!',
       `O evento "${event.title}" foi confirmado!`,
       'calendar',
+      { eventId: event.id },
     );
     return event;
+  }
+
+  private async autoUpdateConcludedEvents() {
+    const now = new Date();
+    const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+
+    const expiredEvents = await this.eventRepository.find({
+      where: {
+        status: EventStatus.APPROVED,
+        dateTime: LessThan(sixHoursAgo),
+      },
+    });
+
+    if (expiredEvents.length > 0) {
+      // Uso do for...of no lugar de forEach para respeitar a assincronia do await
+      for (const event of expiredEvents) {
+        event.status = EventStatus.CONCLUDED;
+
+        // Remove os membros e deleta o chat vinculado
+        if (event.chatId) {
+          await this.chatMemberRepository.delete({ chatId: event.chatId });
+          await this.chatRepository.delete({ id: event.chatId });
+
+          // 👇 RESOLVE O ERRO DE TIPAGEM AQUI 👇
+          event.chatId = null as any;
+        }
+      }
+      await this.eventRepository.save(expiredEvents);
+    }
   }
 
   async reprove(eventId: string, reason: string) {
@@ -245,11 +288,26 @@ export class EventsService {
     if (!event) throw new NotFoundException('Evento não encontrado');
 
     if (reqUser.role === UserRole.ADMIN) {
+      // Se o ADMIN excluir manualmente, apaga membros e o chat
+      if (event.chatId) {
+        await this.chatMemberRepository.delete({ chatId: event.chatId });
+        await this.chatRepository.delete({ id: event.chatId });
+      }
       return this.eventRepository.remove(event);
     } else {
       if (event.creator.id !== reqUser.userId) {
         throw new ForbiddenException('Não autorizado.');
       }
+
+      // Se o organizador cancelar o evento, apagamos o chat também
+      if (event.chatId) {
+        await this.chatMemberRepository.delete({ chatId: event.chatId });
+        await this.chatRepository.delete({ id: event.chatId });
+
+        // 👇 RESOLVE O ERRO DE TIPAGEM AQUI 👇
+        event.chatId = null as any;
+      }
+
       event.status = EventStatus.REPROVED;
       event.rejectionReason = 'Cancelado pelo organizador.';
       return this.eventRepository.save(event);

@@ -8,6 +8,7 @@ import {
   UseGuards,
   Request,
   ForbiddenException,
+  Query,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { NotificationsService } from './notifications.service';
@@ -19,8 +20,20 @@ export class NotificationsController {
 
   // Listar notificações do usuário logado
   @Get()
-  async getMyNotifications(@Request() req) {
-    return this.notifService.getUserNotifications(req.user.userId);
+  async getMyNotifications(
+    @Request() req,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    // Converte para número e passa para o service. Se não vier, usa os padrões 0 e 20.
+    const skipNum = skip ? parseInt(skip, 10) : 0;
+    const takeNum = take ? parseInt(take, 10) : 20;
+
+    return this.notifService.getUserNotifications(
+      req.user.userId,
+      skipNum,
+      takeNum,
+    );
   }
 
   // Marcar uma notificação como lida
@@ -36,7 +49,7 @@ export class NotificationsController {
   async markAllAsRead(@Request() req) {
     return this.notifService.markAllAsRead(req.user.userId);
   }
-  
+
   // (ADMIN) Enviar notificação para todos manualmente
   @Post('admin-broadcast')
   async manualBroadcast(

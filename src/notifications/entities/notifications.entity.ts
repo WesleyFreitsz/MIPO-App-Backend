@@ -18,6 +18,9 @@ export class Notifications {
   @Column()
   message: string;
 
+  @Column({ type: 'json', nullable: true })
+  data: any; // Guardará o ID do post, evento ou usuário
+
   @Column({ nullable: true })
   icon: string; // Ex: 'dice', 'info', 'alert'
 

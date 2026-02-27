@@ -453,4 +453,71 @@ export class ChatsService {
 
     return { message: 'Você saiu do chat com sucesso' };
   }
+
+  /**
+   * Atualizar cargo de um membro (Tornar Admin ou despromover)
+   */
+
+  /**
+   * Editar mensagem
+   */
+  async editMessage(messageId: string, newText: string) {
+    const message = await this.messageRepository.findOne({
+      where: { id: messageId },
+      relations: ['chat'],
+    });
+    if (!message) throw new NotFoundException('Mensagem não encontrada');
+
+    message.content = newText;
+    message.isEdited = true;
+    return this.messageRepository.save(message);
+  }
+
+  /**
+   * Apagar mensagem
+   */
+  async deleteMessage(messageId: string) {
+    const message = await this.messageRepository.findOne({
+      where: { id: messageId },
+      relations: ['chat'],
+    });
+    if (!message) throw new NotFoundException('Mensagem não encontrada');
+
+    message.isDeleted = true;
+    return this.messageRepository.save(message);
+  }
+
+  /**
+   * Definir cor customizada do usuário no chat (Grupos/Eventos)
+   */
+  async updateMemberColor(chatId: string, userId: string, color: string) {
+    const member = await this.memberRepository.findOne({
+      where: { chatId, userId },
+    });
+    if (!member) throw new NotFoundException('Você não é membro deste chat');
+
+    member.customColor = color;
+    await this.memberRepository.save(member);
+    return member;
+  }
+
+  /**
+   * Atualizar o Tema do Chat (Cor dos balões)
+   */
+  async updateMemberBackground(
+    chatId: string,
+    userId: string,
+    themeColor: string,
+  ) {
+    const member = await this.memberRepository.findOne({
+      where: { chatId, userId },
+    });
+
+    if (!member) throw new NotFoundException('Você não é membro deste chat');
+
+    member.backgroundTheme = themeColor;
+    await this.memberRepository.save(member);
+
+    return member;
+  }
 }

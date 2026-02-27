@@ -9,8 +9,6 @@ import { NotificationsGateway } from './notifications.gateway';
 @Injectable()
 export class NotificationsService {
   private expo = new Expo();
-
-  // Limite máximo de notificações mantidas por utilizador no banco de dados
   private readonly MAX_NOTIFICATIONS = 50;
 
   constructor(
@@ -18,7 +16,7 @@ export class NotificationsService {
     private notifRepository: Repository<Notifications>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
-    private notificationsGateway: NotificationsGateway, // Injetando o Gateway
+    private notificationsGateway: NotificationsGateway,
   ) {}
 
   private async sendPush(
@@ -50,36 +48,42 @@ export class NotificationsService {
     }
   }
 
+  // NOVO: Adicionado o parâmetro opcional 'data' para guardar as referências de navegação
   async sendToUser(
     userId: string,
     title: string,
     message: string,
     icon?: string,
     type: string = 'ALERT',
+    data?: any,
   ) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('Usuário não encontrado');
 
+    // 1. SEMPRE guarda na base de dados (mesmo sem Push)
     const notification = this.notifRepository.create({
       title,
       message,
       icon,
       user,
+      data, // Guarda os dados extra
     });
     await this.notifRepository.save(notification);
 
+    // 2. Envia por WebSocket em tempo real
     this.notificationsGateway.sendRealTimeNotification(userId, {
       title,
       message,
       type,
+      data,
     });
 
+    // 3. SE o usuário aceitou notificações Push, dispara pro celular
     if (user.notificationToken) {
-      await this.sendPush(user.notificationToken, title, message);
+      await this.sendPush(user.notificationToken, title, message, data);
     }
 
     await this.pruneOldNotifications(userId);
-
     return notification;
   }
 
@@ -101,7 +105,7 @@ export class NotificationsService {
     }
   }
 
-  async notifyAdmins(title: string, message: string) {
+  async notifyAdmins(title: string, message: string, data?: any) {
     const admins = await this.userRepository.find({
       where: { role: UserRole.ADMIN },
     });
@@ -113,6 +117,7 @@ export class NotificationsService {
           message,
           icon: 'shield',
           user: admin,
+          data,
         }),
       ),
     );
@@ -123,6 +128,7 @@ export class NotificationsService {
         title,
         message,
         type: 'ADMIN_ALERT',
+        data,
       });
     });
 
@@ -134,22 +140,20 @@ export class NotificationsService {
       .map((a) => a.notificationToken)
       .filter((t): t is string => !!t);
     if (tokens.length > 0) {
-      await this.sendPush(tokens, title, message);
+      await this.sendPush(tokens, title, message, data);
     }
   }
 
-  async broadcast(title: string, message: string, icon?: string) {
-    // Busca todos os usuários
+  async broadcast(title: string, message: string, icon?: string, data?: any) {
     const users = await this.userRepository.find();
-
-    // Cria uma notificação individual no banco para cada usuário
     const dbPromises = users.map((user) =>
       this.notifRepository.save(
         this.notifRepository.create({
           title,
           message,
           icon,
-          user, // Agora a notificação pertence ao usuário específico
+          user,
+          data,
         }),
       ),
     );
@@ -159,6 +163,7 @@ export class NotificationsService {
       title,
       message,
       type: 'GLOBAL_ALERT',
+      data,
     });
 
     const tokens = users
@@ -166,9 +171,8 @@ export class NotificationsService {
       .filter((t): t is string => !!t);
 
     if (tokens.length > 0) {
-      await this.sendPush(tokens, title, message);
+      await this.sendPush(tokens, title, message, data);
     }
-
     return { message: 'Notificação global enviada a todos com sucesso' };
   }
 
@@ -179,14 +183,7 @@ export class NotificationsService {
       skip,
       take,
     });
-
-    return {
-      data,
-      total,
-      skip,
-      take,
-      hasMore: total > skip + take,
-    };
+    return { data, total, skip, take, hasMore: total > skip + take };
   }
 
   async markAsRead(id: string) {

@@ -4,7 +4,10 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from 'typeorm';
+
+import { UserAchievement } from './user-achievement.entity';
 
 export enum UserRole {
   USER = 'USER',
@@ -21,6 +24,9 @@ export class User {
 
   @Column()
   age: number;
+
+  @OneToMany(() => UserAchievement, (userAchievement) => userAchievement.user)
+  achievements: UserAchievement[];
 
   @Column({ type: 'varchar', unique: true, nullable: true })
   email: string | null;

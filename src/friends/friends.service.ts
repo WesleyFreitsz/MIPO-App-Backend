@@ -9,7 +9,8 @@ import { Repository } from 'typeorm';
 import { Friendship, FriendshipStatus } from './entities/friendship.entity';
 import { User } from '../users/entities/user.entity';
 import { CreateFriendshipDto } from './dto/create-friendship.dto';
-import { AcceptFriendshipDto } from './dto/accept-friendship.dto';
+import { NotificationsService } from '../notifications/notifications.service'; // <--- IMPORTADO
+import { AchievementsService } from 'src/achievements/achievements.service';
 
 @Injectable()
 export class FriendsService {
@@ -18,6 +19,8 @@ export class FriendsService {
     private friendshipRepository: Repository<Friendship>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    private notificationsService: NotificationsService, 
+    private achievementsService: AchievementsService, 
   ) {}
 
   /**
@@ -49,44 +52,112 @@ export class FriendsService {
         throw new ConflictException('Você já é amigo deste usuário');
       }
       if (existingFriendship.status === FriendshipStatus.PENDING) {
-        throw new ConflictException(
-          'Solicitação de amizade já foi enviada para este usuário',
-        );
+        // --- FIX DO BUG ---
+        // Se a solicitação PENDENTE foi enviada pelo OUTRO usuário para VOCÊ:
+        if (
+          existingFriendship.userId === dto.friendId &&
+          existingFriendship.friendId === userId
+        ) {
+          // Aceita a amizade automaticamente!
+          existingFriendship.status = FriendshipStatus.ACCEPTED;
+          const saved =
+            await this.friendshipRepository.save(existingFriendship);
+
+          // Notifica o outro usuário que você aceitou
+          const requester = await this.usersRepository.findOne({
+            where: { id: userId },
+          });
+          if (requester) {
+            await this.notificationsService.sendToUser(
+              dto.friendId,
+              'Nova Amizade! 🎉',
+              `Você e @${requester.nickname || requester.name} agora são amigos.`,
+              'user-check',
+              'ALERT',
+              { userId: userId }, // Navegar para o seu perfil
+            );
+          }
+          return saved;
+        } else {
+          throw new ConflictException(
+            'Solicitação de amizade já foi enviada para este usuário',
+          );
+        }
       }
     }
 
+    // Se não existir, cria a solicitação normal
     const friendship = this.friendshipRepository.create({
       userId,
       friendId: dto.friendId,
       status: FriendshipStatus.PENDING,
     });
+    const savedFriendship = await this.friendshipRepository.save(friendship);
 
-    return this.friendshipRepository.save(friendship);
+    // --- ENVIAR NOTIFICAÇÃO DE SOLICITAÇÃO ---
+    const requesterInfo = await this.usersRepository.findOne({
+      where: { id: userId },
+    });
+    if (requesterInfo) {
+      await this.notificationsService.sendToUser(
+        dto.friendId,
+        'Novo pedido de amizade! 🤝',
+        `@${requesterInfo.nickname || requesterInfo.name} quer se conectar com você.`,
+        'user-plus',
+        'ALERT',
+        { userId: userId }, // Navegar para o perfil de quem pediu
+      );
+    }
+
+    return savedFriendship;
   }
 
-  /**
-   * Aceitar solicitação de amizade
-   */
   async acceptFriendRequest(userId: string, friendshipId: string) {
     const friendship = await this.friendshipRepository.findOne({
       where: { id: friendshipId },
+      relations: ['user', 'friend'], 
     });
 
-    if (!friendship) {
-      throw new NotFoundException('Solicitação não encontrada');
-    }
-
-    if (friendship.friendId !== userId) {
-      throw new BadRequestException('Você não pode aceitar esta solicitação');
-    }
-
-    if (friendship.status !== FriendshipStatus.PENDING) {
-      throw new BadRequestException('Esta solicitação já foi processada');
-    }
+    if (!friendship) throw new NotFoundException('Solicitação não encontrada');
+    if (friendship.friendId !== userId) throw new BadRequestException('Você não pode aceitar esta solicitação');
+    if (friendship.status !== FriendshipStatus.PENDING) throw new BadRequestException('Esta solicitação já foi processada');
 
     friendship.status = FriendshipStatus.ACCEPTED;
-    return this.friendshipRepository.save(friendship);
+    const saved = await this.friendshipRepository.save(friendship);
+
+    const syncFriendsAchievements = async (uid: string) => {
+      const friendsCount = await this.friendshipRepository.count({
+        where: [
+          { userId: uid, status: FriendshipStatus.ACCEPTED },
+          { friendId: uid, status: FriendshipStatus.ACCEPTED },
+        ],
+      });
+
+      await this.achievementsService.checkAndAwardByCondition(
+        uid,
+        'user.amigos',
+        friendsCount,
+      );
+    };
+
+    await syncFriendsAchievements(friendship.userId);
+    await syncFriendsAchievements(friendship.friendId);
+    
+    const acceptor = await this.usersRepository.findOne({ where: { id: userId } });
+    if (acceptor) {
+      await this.notificationsService.sendToUser(
+        friendship.userId,
+        'Pedido Aceito! 🎉',
+        `@${acceptor.nickname || acceptor.name} aceitou seu pedido de amizade.`,
+        'user-check',
+        'ALERT',
+        { userId: userId },
+      );
+    }
+
+    return saved;
   }
+
 
   /**
    * Rejeitar solicitação de amizade

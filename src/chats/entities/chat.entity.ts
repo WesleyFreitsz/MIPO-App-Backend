@@ -24,6 +24,10 @@ export class Chat {
 
   @Column({ type: 'enum', enum: ChatType, default: ChatType.PRIVATE })
   type: ChatType;
+  
+
+  @Column({ nullable: true })
+  theme: string; // Ex: '#4A90E2' (Azul), '#8A2BE2' (Roxo), etc.
 
   @Column({ type: 'varchar' })
   name: string;

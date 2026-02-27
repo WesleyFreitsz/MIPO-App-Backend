@@ -17,7 +17,7 @@ export enum ChatMemberRole {
 }
 
 @Entity('chat_members')
-@Index(['userId', 'chatId']) 
+@Index(['userId', 'chatId'])
 @Index(['chatId'])
 export class ChatMember {
   @PrimaryGeneratedColumn('uuid')
@@ -44,6 +44,13 @@ export class ChatMember {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @Column({ nullable: true })
+  customColor: string; // Cor do nome (Pública)
+
+  @Column({ nullable: true })
+  backgroundTheme: string; // <-- NOVA: Cor de fundo do chat (Pessoal)
+  // Adicione esta coluna na entidade ChatMember
 
   @ManyToOne(() => Chat, (chat) => chat.members, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'chatId' })

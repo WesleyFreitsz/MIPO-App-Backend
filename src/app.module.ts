@@ -38,6 +38,10 @@ import { Transaction } from './finance/entities/transaction.entity';
 import { UploadsController } from './uploads/uploads.controller';
 import { ReportsModule } from './reports/reports.module';
 import { Report } from './reports/entities/report.entity';
+import { Upload } from './uploads/entities/upload.entity';
+import { Rarity } from './achievements/entities/rarity.entity';
+import { UploadsModule } from './uploads/uploads.module';
+import { UserAchievement } from './users/entities/user-achievement.entity';
 
 @Module({
   imports: [
@@ -54,6 +58,8 @@ import { Report } from './reports/entities/report.entity';
         PostComment,
         PostLike,
         Chat,
+        Rarity, // <--- ADICIONADO
+        UserAchievement,
         ChatMember,
         ChatMessage,
         Achievement,
@@ -62,13 +68,14 @@ import { Report } from './reports/entities/report.entity';
         Room,
         Transaction,
         Report,
+        Upload,
       ],
-      synchronize: false,
+      synchronize: true,
       ssl: {
         rejectUnauthorized: false,
       },
       extra: {
-        max: 10, 
+        max: 10,
       },
     }),
     MailerModule.forRoot({
@@ -104,7 +111,7 @@ import { Report } from './reports/entities/report.entity';
     RoomsModule,
     FinanceModule,
     ReportsModule,
+    UploadsModule,
   ],
-  controllers: [UploadsController],
 })
 export class AppModule {}

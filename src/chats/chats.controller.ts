@@ -152,4 +152,69 @@ export class ChatsController {
   async deleteChat(@Request() req, @Param('id') chatId: string) {
     return this.chatsService.deleteChat(chatId, req.user.userId);
   }
+
+  @Patch('messages/:id')
+  async editMessage(
+    @Param('id') messageId: string,
+    @Body('content') content: string,
+  ) {
+    return this.chatsService.editMessage(messageId, content);
+  }
+
+  /**
+   * Apagar mensagem
+   * IMPORTANTE: Deve ficar ANTES de @Delete(':id')
+   * DELETE /chats/messages/:id
+   */
+  @Delete('messages/:id')
+  async deleteMessage(@Param('id') messageId: string) {
+    return this.chatsService.deleteMessage(messageId);
+  }
+
+  /**
+   * Atualizar cargo do membro (Tornar Admin)
+   * PATCH /chats/:id/members/:userId/role
+   */
+  /**
+   * Promover membro a Admin
+   * PATCH /chats/:id/members/:memberId/promote
+   */
+  @Patch(':id/members/:memberId/promote')
+  async promoteToAdmin(
+    @Request() req,
+    @Param('id') chatId: string,
+    @Param('memberId') targetUserId: string,
+  ) {
+    return this.chatsService.promoteToAdmin(
+      chatId,
+      req.user.userId,
+      targetUserId,
+    );
+  }
+
+  /**
+   * Atualizar a cor do nome do usuário no chat
+   * PATCH /chats/:id/my-color
+   */
+  @Patch(':id/my-color')
+  async updateMyColor(
+    @Request() req,
+    @Param('id') chatId: string,
+    @Body('color') color: string,
+  ) {
+    return this.chatsService.updateMemberColor(chatId, req.user.userId, color);
+  }
+
+  @Patch(':id/my-background')
+  async updateMyBackground(
+    @Request() req,
+    @Param('id') chatId: string,
+    @Body('theme') theme: string,
+  ) {
+    return this.chatsService.updateMemberBackground(
+      chatId,
+      req.user.userId,
+      theme,
+    );
+  }
 }

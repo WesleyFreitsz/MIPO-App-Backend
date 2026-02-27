@@ -26,14 +26,12 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Quando um usuário conecta ao WebSocket
    */
   handleConnection(client: Socket) {
-    console.log(`[WS] Cliente conectado: ${client.id}`);
   }
 
   /**
    * Quando um usuário desconecta do WebSocket
    */
   handleDisconnect(client: Socket) {
-    console.log(`[WS] Cliente desconectado: ${client.id}`);
     // Remove do mapa de usuários
     for (const [userId, socketId] of this.userSockets.entries()) {
       if (socketId === client.id) {
@@ -60,7 +58,6 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // 👇 Coloca o usuário em uma sala pessoal e global
     client.join(`user:${data.userId}`);
 
-    console.log(`[WS] Usuário autenticado: ${data.userId} -> ${client.id}`);
     client.emit('auth:success', { message: 'Autenticado com sucesso' });
     return { success: true };
   }
@@ -84,7 +81,6 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const chats = this.socketChats.get(client.id);
     if (chats) chats.push(data.chatId);
 
-    console.log(`[WS] Usuário entrou no chat: ${data.chatId}`);
     // Notificar todos que alguém entrou no chat
     this.server.to(roomName).emit('chat:user-joined', {
       userId: client.data.userId,
@@ -114,7 +110,6 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       );
     }
 
-    console.log(`[WS] Usuário saiu do chat: ${data.chatId}`);
     this.server.to(roomName).emit('chat:user-left', {
       userId: client.data.userId,
       chatId: data.chatId,
@@ -170,7 +165,6 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.server.to(`user:${member.userId}`).emit('chat:list-update');
       });
 
-      console.log(`[WS] Mensagem enviada no chat ${data.chatId} por ${userId}`);
       return { success: true, messageId: message.id };
     } catch (error: any) {
       console.error('[WS] Erro ao enviar mensagem:', error);
@@ -213,7 +207,6 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.server.to(`user:${member.userId}`).emit('chat:list-update');
       });
 
-      console.log(`[WS] Mensagens marcadas como lidas no chat ${data.chatId}`);
       return { success: true };
     } catch (error: any) {
       console.error('[WS] Erro ao marcar como lido:', error);
@@ -221,6 +214,35 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         message: error.message || 'Erro ao marcar como lido',
       });
     }
+  }
+
+  @SubscribeMessage('editMessage')
+  async handleEditMessage(
+    @MessageBody() data: { messageId: string; newText: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    // Lógica para atualizar a mensagem no banco via chats.service
+    const updatedMessage = await this.chatsService.editMessage(
+      data.messageId,
+      data.newText,
+    );
+    // Emitir para a sala do chat
+    this.server
+      .to(`chat_${updatedMessage.chat.id}`)
+      .emit('messageEdited', updatedMessage);
+  }
+
+  @SubscribeMessage('deleteMessage')
+  async handleDeleteMessage(
+    @MessageBody() data: { messageId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const deletedMessage = await this.chatsService.deleteMessage(
+      data.messageId,
+    );
+    this.server
+      .to(`chat_${deletedMessage.chat.id}`)
+      .emit('messageDeleted', deletedMessage);
   }
 
   /**

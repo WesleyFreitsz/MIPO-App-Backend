@@ -140,6 +140,7 @@ export class PostsService {
     });
 
     // Notificação Push para o dono do post
+    // Notificação Push para o dono do post
     if (post.userId !== userId) {
       const liker = await this.postRepository.manager.findOne(User, {
         where: { id: userId },
@@ -149,11 +150,29 @@ export class PostsService {
           post.userId,
           'Novo Like! ❤️',
           `@${liker.nickname || liker.name} curtiu seu post.`,
+          'heart', // Ícone
+          'ALERT', // Tipo
+          { postId: post.id }, // <--- A MÁGICA DA NAVEGAÇÃO AQUI
         );
       }
     }
 
     return like;
+  }
+
+  async updateComment(commentId: string, userId: string, content: string) {
+    const comment = await this.commentRepository.findOne({
+      where: { id: commentId },
+    });
+    if (!comment) throw new NotFoundException('Comentário não encontrado');
+    if (comment.userId !== userId)
+      throw new BadRequestException(
+        'Você não tem permissão para editar este comentário',
+      );
+
+    comment.content = content;
+    // Opcional: Pode adicionar uma flag isEdited na entidade de comentários futuramente
+    return this.commentRepository.save(comment);
   }
 
   async unlikePost(postId: string, userId: string) {
@@ -197,6 +216,9 @@ export class PostsService {
           post.userId,
           'Novo Comentário! 💬',
           `@${commenter.nickname || commenter.name} comentou no seu post.`,
+          'message-circle', // Ícone
+          'ALERT', // Tipo
+          { postId: post.id }, // <--- A MÁGICA DA NAVEGAÇÃO AQUI
         );
       }
     }
