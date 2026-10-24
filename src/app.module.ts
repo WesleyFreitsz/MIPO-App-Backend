@@ -43,6 +43,8 @@ import { Upload } from './uploads/entities/upload.entity';
 import { Rarity } from './achievements/entities/rarity.entity';
 import { UploadsModule } from './uploads/uploads.module';
 import { UserAchievement } from './users/entities/user-achievement.entity';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 
 function resolveDatabaseSsl(mode: string | undefined, ca: string | undefined) {
   if (mode === 'false') return false;
@@ -127,5 +129,7 @@ function resolveDatabaseSsl(mode: string | undefined, ca: string | undefined) {
     ReportsModule,
     UploadsModule,
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}
