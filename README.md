@@ -36,7 +36,7 @@ Copie `.env.example` para `.env` e preencha os valores.
 | `STORAGE_ENDPOINT` / `STORAGE_REGION` | Sim | Endpoint S3 do storage de arquivos (ex.: Backblaze B2 `https://s3.us-east-005.backblazeb2.com` e `us-east-005`). |
 | `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY` | Sim | Chave de aplicação do storage (no B2: keyID e applicationKey). |
 | `STORAGE_BUCKET` | Sim | Nome do bucket público dos uploads. |
-| `STORAGE_PUBLIC_URL` | Sim | Endereço público dos arquivos, sem barra no fim (ex.: `https://mipo-bucket.s3.us-east-005.backblazeb2.com`). |
+| `STORAGE_PUBLIC_URL` | Sim | Endereço público dos arquivos, sem barra no fim. Com bucket privado no B2, é a URL do Worker em `workers/files-proxy` (ex.: `https://mipo-files.seu-subdominio.workers.dev`). |
 | `STORAGE_FORCE_PATH_STYLE` | Não | `true` para emuladores S3 locais; deixe `false` no B2. |
 | `DB_SYNCHRONIZE` | Não | `true` faz o TypeORM ajustar o schema ao subir. Use só de forma pontual; o padrão é `false`. |
 | `DB_SSL` | Não | `verify` exige certificado válido (use no Neon). `false` desliga SSL (útil para Postgres local). Sem valor, usa SSL sem verificar o certificado. |
