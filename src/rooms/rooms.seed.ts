@@ -1,17 +1,19 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Room, RoomType, ReservationStatus } from './entities/room.entity';
+import { todayInRoomsTimeZone } from './room-time.util';
 
 @Injectable()
 export class RoomsSeed {
+  private readonly logger = new Logger(RoomsSeed.name);
+
   constructor(
     @InjectRepository(Room)
     private roomsRepository: Repository<Room>,
   ) {}
 
   async seed() {
-    console.log('[ROOMS SEED] Iniciando seed das salas fixas...');
     const fixedRooms = [
       {
         id: 'a1234567-b890-c123-d456-e78901234567',
@@ -41,13 +43,13 @@ export class RoomsSeed {
 
         if (oldRoom) {
           // Deletar sala antiga para evitar conflito
-          console.log(
-            `🗑️ Deletando sala antiga (${oldRoom.id}) do tipo ${roomData.type}`,
+          this.logger.log(
+            `Deletando sala antiga (${oldRoom.id}) do tipo ${roomData.type}`,
           );
           await this.roomsRepository.remove(oldRoom);
         }
 
-        const today = new Date().toISOString().split('T')[0];
+        const today = todayInRoomsTimeZone();
         const room = this.roomsRepository.create({
           id: roomData.id,
           type: roomData.type,
@@ -60,24 +62,25 @@ export class RoomsSeed {
           chatId: null,
         });
         await this.roomsRepository.save(room);
-        console.log(
-          `✅ Sala ${roomData.type} criada com sucesso (ID: ${roomData.id})`,
-        );
+        this.logger.log(`Sala ${roomData.type} criada (ID: ${roomData.id})`);
       } else {
         // Atualizar data diariamente se existir com ID correto
-        const today = new Date().toISOString().split('T')[0];
+        const today = todayInRoomsTimeZone();
+        let changed = false;
         if (existingRoom.date !== today) {
           existingRoom.date = today;
           existingRoom.participants = [];
+          changed = true;
+        }
+        if (existingRoom.reservationStatus !== ReservationStatus.APPROVED) {
+          existingRoom.reservationStatus = ReservationStatus.APPROVED;
+          changed = true;
+        }
+        if (changed) {
           await this.roomsRepository.save(existingRoom);
-          console.log(`♻️ Sala ${roomData.type} resetada para hoje!`);
-        } else {
-          console.log(
-            `ℹ️ Sala ${roomData.type} já existe e está atualizada (ID: ${roomData.id})`,
-          );
+          this.logger.log(`Sala ${roomData.type} atualizada para hoje`);
         }
       }
     }
-    console.log('[ROOMS SEED] ✅ Seed concluído!');
   }
 }

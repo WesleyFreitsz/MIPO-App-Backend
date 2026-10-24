@@ -2,19 +2,22 @@ import {
   Controller,
   Get,
   Post,
-  Put,
   Delete,
   Body,
   Param,
   UseGuards,
-  Request,
   Query,
   Patch,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { PostsService } from './posts.service';
 import { CreatePostDto } from './dto/create-post.dto';
+import { UpdatePostDto } from './dto/update-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
 
 @Controller('posts')
 @UseGuards(JwtAuthGuard)
@@ -26,8 +29,11 @@ export class PostsController {
    * POST /posts
    */
   @Post()
-  async createPost(@Request() req, @Body() dto: CreatePostDto) {
-    return this.postsService.createPost(req.user.userId, dto);
+  async createPost(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreatePostDto,
+  ) {
+    return this.postsService.createPost(user.userId, dto);
   }
 
   /**
@@ -36,11 +42,14 @@ export class PostsController {
    */
   @Get('feed')
   async getFeed(
-    @Request() req,
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() pagination: PaginationQueryDto,
   ) {
-    return this.postsService.getFeed(req.user.userId, skip, take);
+    return this.postsService.getFeed(
+      user.userId,
+      pagination.skip,
+      pagination.take,
+    );
   }
 
   /**
@@ -49,31 +58,41 @@ export class PostsController {
    */
   @Get('user/:userId')
   async getUserPosts(
-    @Request() req,
-    @Param('userId') userId: string,
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Query() pagination: PaginationQueryDto,
   ) {
-    return this.postsService.getUserPosts(userId, skip, take);
+    return this.postsService.getUserPosts(
+      userId,
+      user.userId,
+      pagination.skip,
+      pagination.take,
+    );
   }
 
   @Patch('comments/:id')
   async updateComment(
-    @Param('id') id: string,
-    @Request() req,
-    @Body('content') content: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateCommentDto,
   ) {
-    return this.postsService.updateComment(id, req.user.userId, content);
+    return this.postsService.updateComment(id, user.userId, dto.content);
   }
 
   @Delete('comments/:id')
-  async deleteComment(@Request() req, @Param('id') commentId: string) {
-    return this.postsService.deleteComment(commentId, req.user.userId);
+  async deleteComment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) commentId: string,
+  ) {
+    return this.postsService.deleteComment(commentId, user.userId);
   }
- 
+
   @Get(':id')
-  async getPost(@Request() req, @Param('id') postId: string) {
-    return this.postsService.getPost(postId, req.user.userId);
+  async getPost(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) postId: string,
+  ) {
+    return this.postsService.getPost(postId, user.userId);
   }
 
   /**
@@ -82,11 +101,11 @@ export class PostsController {
    */
   @Patch(':id') // Alterado de @Put para @Patch para maior compatibilidade
   async updatePost(
-    @Request() req,
-    @Param('id') postId: string,
-    @Body() dto: CreatePostDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) postId: string,
+    @Body() dto: UpdatePostDto,
   ) {
-    return this.postsService.updatePost(postId, req.user.userId, dto);
+    return this.postsService.updatePost(postId, user.userId, dto);
   }
 
   /**
@@ -94,8 +113,11 @@ export class PostsController {
    * DELETE /posts/:id
    */
   @Delete(':id')
-  async deletePost(@Request() req, @Param('id') postId: string) {
-    return this.postsService.deletePost(postId, req.user.userId);
+  async deletePost(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) postId: string,
+  ) {
+    return this.postsService.deletePost(postId, user.userId);
   }
 
   /**
@@ -103,8 +125,11 @@ export class PostsController {
    * POST /posts/:id/like
    */
   @Post(':id/like')
-  async likePost(@Request() req, @Param('id') postId: string) {
-    return this.postsService.likePost(postId, req.user.userId);
+  async likePost(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) postId: string,
+  ) {
+    return this.postsService.likePost(postId, user.userId);
   }
 
   /**
@@ -112,8 +137,11 @@ export class PostsController {
    * DELETE /posts/:id/like
    */
   @Delete(':id/like')
-  async unlikePost(@Request() req, @Param('id') postId: string) {
-    return this.postsService.unlikePost(postId, req.user.userId);
+  async unlikePost(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) postId: string,
+  ) {
+    return this.postsService.unlikePost(postId, user.userId);
   }
 
   /**
@@ -122,11 +150,11 @@ export class PostsController {
    */
   @Post(':id/comments')
   async commentPost(
-    @Request() req,
-    @Param('id') postId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) postId: string,
     @Body() dto: CreateCommentDto,
   ) {
-    return this.postsService.commentPost(postId, req.user.userId, dto);
+    return this.postsService.commentPost(postId, user.userId, dto);
   }
 
   /**
@@ -135,11 +163,13 @@ export class PostsController {
    */
   @Get(':id/comments')
   async getPostComments(
-    @Request() req,
-    @Param('id') postId: string,
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
+    @Param('id', ParseUUIDPipe) postId: string,
+    @Query() pagination: PaginationQueryDto,
   ) {
-    return this.postsService.getPostComments(postId, skip, take);
+    return this.postsService.getPostComments(
+      postId,
+      pagination.skip,
+      pagination.take,
+    );
   }
 }

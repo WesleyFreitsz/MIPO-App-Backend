@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 import { User } from './users/entities/user.entity';
 // CORREÇÃO 1: Importar o Event explicitamente
@@ -34,8 +35,8 @@ import { Achievement } from './achievements/entities/achievement.entity';
 import { Reward } from './rewards/entities/reward.entity';
 import { Game } from './games/entities/game.entity';
 import { Room } from './rooms/entities/room.entity';
+import { SalinhaReservation } from './rooms/entities/salinha-reservation.entity';
 import { Transaction } from './finance/entities/transaction.entity';
-import { UploadsController } from './uploads/uploads.controller';
 import { ReportsModule } from './reports/reports.module';
 import { Report } from './reports/entities/report.entity';
 import { Upload } from './uploads/entities/upload.entity';
@@ -43,39 +44,52 @@ import { Rarity } from './achievements/entities/rarity.entity';
 import { UploadsModule } from './uploads/uploads.module';
 import { UserAchievement } from './users/entities/user-achievement.entity';
 
+function resolveDatabaseSsl(mode: string | undefined, ca: string | undefined) {
+  if (mode === 'false') return false;
+  if (ca) return { ca: ca.replace(/\\n/g, '\n'), rejectUnauthorized: true };
+  if (mode === 'verify') return { rejectUnauthorized: true };
+  return { rejectUnauthorized: false };
+}
+
 @Module({
   imports: [
-    ConfigModule.forRoot(),
-    TypeOrmModule.forRoot({
-      type: 'postgres',
-      url: process.env.DIRECT_URL,
-      entities: [
-        User,
-        Event,
-        Notifications,
-        Friendship,
-        Post,
-        PostComment,
-        PostLike,
-        Chat,
-        Rarity, // <--- ADICIONADO
-        UserAchievement,
-        ChatMember,
-        ChatMessage,
-        Achievement,
-        Reward,
-        Game,
-        Room,
-        Transaction,
-        Report,
-        Upload,
-      ],
-      synchronize: true,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-      extra: {
-        max: 10,
+    ConfigModule.forRoot({ isGlobal: true }),
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const sslCa = configService.get<string>('DB_SSL_CA');
+        return {
+          type: 'postgres' as const,
+          url: configService.getOrThrow<string>('DIRECT_URL'),
+          entities: [
+            User,
+            Event,
+            Notifications,
+            Friendship,
+            Post,
+            PostComment,
+            PostLike,
+            Chat,
+            Rarity, // <--- ADICIONADO
+            UserAchievement,
+            ChatMember,
+            ChatMessage,
+            Achievement,
+            Reward,
+            Game,
+            Room,
+            SalinhaReservation,
+            Transaction,
+            Report,
+            Upload,
+          ],
+          synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
+          ssl: resolveDatabaseSsl(configService.get<string>('DB_SSL'), sslCa),
+          extra: {
+            max: 10,
+          },
+        };
       },
     }),
     MailerModule.forRoot({

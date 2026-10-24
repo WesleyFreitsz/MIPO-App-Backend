@@ -6,63 +6,55 @@ import {
   Patch,
   Param,
   UseGuards,
-  Request,
-  ForbiddenException,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { NotificationsService } from './notifications.service';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
+import { UserRole } from 'src/users/entities/user.entity';
+import { BroadcastNotificationDto } from './dto/broadcast-notification.dto';
 
 @Controller('notifications')
-@UseGuards(AuthGuard('jwt')) // Protege todas as rotas com JWT
+@UseGuards(JwtAuthGuard, RolesGuard) // Protege todas as rotas com JWT
 export class NotificationsController {
   constructor(private readonly notifService: NotificationsService) {}
 
   // Listar notificações do usuário logado
   @Get()
   async getMyNotifications(
-    @Request() req,
-    @Query('skip') skip?: string,
-    @Query('take') take?: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() pagination: PaginationQueryDto,
   ) {
-    // Converte para número e passa para o service. Se não vier, usa os padrões 0 e 20.
-    const skipNum = skip ? parseInt(skip, 10) : 0;
-    const takeNum = take ? parseInt(take, 10) : 20;
-
     return this.notifService.getUserNotifications(
-      req.user.userId,
-      skipNum,
-      takeNum,
+      user.userId,
+      pagination.skip,
+      pagination.take,
     );
+  }
+
+  @Patch('read-all')
+  async markAllAsRead(@CurrentUser() user: AuthenticatedUser) {
+    return this.notifService.markAllAsRead(user.userId);
   }
 
   // Marcar uma notificação como lida
   @Patch(':id/read')
-  async markAsRead(@Param('id') id: string) {
-    // Nota: Você precisará adicionar o método markAsRead no Service,
-    // ou usar um update simples aqui. Vou deixar a sugestão:
-    // return this.notifService.markAsRead(id);
-    return { message: 'Notificação lida' };
-  }
-
-  @Patch('read-all')
-  async markAllAsRead(@Request() req) {
-    return this.notifService.markAllAsRead(req.user.userId);
+  async markAsRead(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.notifService.markAsRead(id, user.userId);
   }
 
   // (ADMIN) Enviar notificação para todos manualmente
   @Post('admin-broadcast')
-  async manualBroadcast(
-    @Request() req,
-    @Body() body: { title: string; message: string; icon?: string },
-  ) {
-    if (req.user.role !== 'ADMIN') {
-      // Verifica no Token se é Admin
-      throw new ForbiddenException(
-        'Apenas administradores podem enviar alertas globais.',
-      );
-    }
-
-    return this.notifService.broadcast(body.title, body.message, body.icon);
+  @Roles(UserRole.ADMIN)
+  async manualBroadcast(@Body() dto: BroadcastNotificationDto) {
+    return this.notifService.broadcast(dto.title, dto.message, dto.icon);
   }
 }

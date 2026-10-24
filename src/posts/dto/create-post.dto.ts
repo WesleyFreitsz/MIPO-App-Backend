@@ -1,11 +1,13 @@
-import { IsString, IsOptional, MinLength } from 'class-validator';
+import { IsString, IsOptional, MaxLength, Matches } from 'class-validator';
 
 export class CreatePostDto {
   @IsString()
-  @MinLength(1)
+  @MaxLength(5000)
   content: string;
 
   @IsOptional()
   @IsString()
-  imageUrl?: string;
+  @MaxLength(2048)
+  @Matches(/^https?:\/\//, { message: 'URL de imagem inválida' })
+  imageUrl?: string | null;
 }

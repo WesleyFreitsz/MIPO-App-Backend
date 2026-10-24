@@ -28,10 +28,10 @@ export class Game {
   maxPlayers: number;
 
   @Column({ type: 'text', nullable: true })
-  imageUrl: string;
+  imageUrl: string | null;
 
-  @Column({ nullable: true })
-  videoUrl: string;
+  @Column({ type: 'varchar', nullable: true })
+  videoUrl: string | null;
 
   @Column({ default: false })
   isFeatured: boolean;

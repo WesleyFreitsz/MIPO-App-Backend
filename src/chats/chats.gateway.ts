@@ -2,62 +2,78 @@ import {
   WebSocketGateway,
   WebSocketServer,
   SubscribeMessage,
+  OnGatewayInit,
   OnGatewayConnection,
-  OnGatewayDisconnect,
   ConnectedSocket,
   MessageBody,
+  WsException,
 } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
+import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Namespace, Socket } from 'socket.io';
 import { ChatsService } from './chats.service';
-import { SendMessageDto } from './dto/send-message.dto';
+import { SocketAuthService } from 'src/auth/socket-auth.service';
+import {
+  ChatRoomDto,
+  SocketDeleteMessageDto,
+  SocketEditMessageDto,
+  SocketSendMessageDto,
+} from './dto/chat-socket.dto';
 
-@WebSocketGateway({ cors: { origin: '*' }, namespace: 'chats' })
-export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  @WebSocketServer() server: Server;
+interface ChatSocketData {
+  userId?: string;
+}
 
-  // Map para rastrear usuários conectados: userId -> socket id
-  private userSockets = new Map<string, string>();
-  // Map para rastrear qual chat cada socket está escutando
-  private socketChats = new Map<string, string[]>();
+function socketUserId(client: Socket): string | undefined {
+  const data = client.data as ChatSocketData | undefined;
+  return data?.userId;
+}
 
-  constructor(private chatsService: ChatsService) {}
+@UsePipes(
+  new ValidationPipe({
+    whitelist: true,
+    transform: true,
+    exceptionFactory: () => new WsException('Dados inválidos'),
+  }),
+)
+@WebSocketGateway({ namespace: 'chats' })
+export class ChatsGateway implements OnGatewayInit, OnGatewayConnection {
+  @WebSocketServer() server: Namespace;
+
+  private readonly logger = new Logger(ChatsGateway.name);
+
+  constructor(
+    private chatsService: ChatsService,
+    private socketAuthService: SocketAuthService,
+  ) {}
+
+  afterInit(server: Namespace) {
+    server.use((socket, next) => {
+      this.socketAuthService
+        .authenticate(socket)
+        .then((userId) => {
+          if (!userId) {
+            next(new Error('Não autenticado'));
+            return;
+          }
+          (socket.data as ChatSocketData).userId = userId;
+          next();
+        })
+        .catch(() => next(new Error('Não autenticado')));
+    });
+  }
 
   /**
    * Quando um usuário conecta ao WebSocket
    */
-  handleConnection(client: Socket) {
-  }
-
-  /**
-   * Quando um usuário desconecta do WebSocket
-   */
-  handleDisconnect(client: Socket) {
-    // Remove do mapa de usuários
-    for (const [userId, socketId] of this.userSockets.entries()) {
-      if (socketId === client.id) {
-        this.userSockets.delete(userId);
-        break;
-      }
+  async handleConnection(client: Socket) {
+    const userId = socketUserId(client);
+    if (userId) {
+      await client.join(`user:${userId}`);
     }
-    // Remove dos chats que estava escutando
-    this.socketChats.delete(client.id);
   }
 
-  /**
-   * Autenticar usuário e registrar sua conexão
-   * Cliente envia: { userId: string }
-   */
   @SubscribeMessage('auth')
-  handleAuth(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { userId: string },
-  ) {
-    this.userSockets.set(data.userId, client.id);
-    client.data.userId = data.userId;
-
-    // 👇 Coloca o usuário em uma sala pessoal e global
-    client.join(`user:${data.userId}`);
-
+  handleAuth(@ConnectedSocket() client: Socket) {
     client.emit('auth:success', { message: 'Autenticado com sucesso' });
     return { success: true };
   }
@@ -67,26 +83,26 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Cliente envia: { chatId: string }
    */
   @SubscribeMessage('chat:join')
-  handleJoinChat(
+  async handleJoinChat(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { chatId: string },
+    @MessageBody() data: ChatRoomDto,
   ) {
-    const roomName = `chat:${data.chatId}`;
-    client.join(roomName);
+    const userId = this.requireUserId(client);
 
-    // Rastrear quais chats esse socket está escutando
-    if (!this.socketChats.has(client.id)) {
-      this.socketChats.set(client.id, []);
+    if (!(await this.chatsService.isMember(data.chatId, userId))) {
+      client.emit('error', { message: 'Você não é membro deste chat' });
+      return { success: false };
     }
-    const chats = this.socketChats.get(client.id);
-    if (chats) chats.push(data.chatId);
 
-    // Notificar todos que alguém entrou no chat
+    const roomName = `chat:${data.chatId}`;
+    await client.join(roomName);
+
     this.server.to(roomName).emit('chat:user-joined', {
-      userId: client.data.userId,
+      userId,
       chatId: data.chatId,
       timestamp: new Date(),
     });
+    return { success: true };
   }
 
   /**
@@ -94,24 +110,16 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Cliente envia: { chatId: string }
    */
   @SubscribeMessage('chat:leave')
-  handleLeaveChat(
+  async handleLeaveChat(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { chatId: string },
+    @MessageBody() data: ChatRoomDto,
   ) {
+    const userId = this.requireUserId(client);
     const roomName = `chat:${data.chatId}`;
-    client.leave(roomName);
-
-    // Remover do rastreamento
-    const chats = this.socketChats.get(client.id);
-    if (chats) {
-      this.socketChats.set(
-        client.id,
-        chats.filter((c) => c !== data.chatId),
-      );
-    }
+    await client.leave(roomName);
 
     this.server.to(roomName).emit('chat:user-left', {
-      userId: client.data.userId,
+      userId,
       chatId: data.chatId,
       timestamp: new Date(),
     });
@@ -124,21 +132,16 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('message:send')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { chatId: string; content: string; imageUrl?: string },
+    @MessageBody() data: SocketSendMessageDto,
   ) {
     try {
-      const userId = client.data.userId;
-
-      if (!userId) {
-        client.emit('error', { message: 'Não autenticado' });
-        return;
-      }
+      const userId = this.requireUserId(client);
 
       // Salvar mensagem no banco de dados
       const message = await this.chatsService.sendMessage(data.chatId, userId, {
         content: data.content,
         imageUrl: data.imageUrl,
-      } as SendMessageDto);
+      });
 
       const roomName = `chat:${data.chatId}`;
 
@@ -160,16 +163,13 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
 
       // 👇 Avisa as Salas Pessoais para atualizarem a lista global
-      const chatDetails = await this.chatsService.getChatDetails(data.chatId);
-      chatDetails.members.forEach((member) => {
-        this.server.to(`user:${member.userId}`).emit('chat:list-update');
-      });
+      await this.notifyMembersListUpdate(data.chatId);
 
       return { success: true, messageId: message.id };
-    } catch (error: any) {
-      console.error('[WS] Erro ao enviar mensagem:', error);
+    } catch (error) {
+      this.logger.warn(`Erro ao enviar mensagem: ${this.errorMessage(error)}`);
       client.emit('error', {
-        message: error.message || 'Erro ao enviar mensagem',
+        message: this.errorMessage(error, 'Erro ao enviar mensagem'),
       });
     }
   }
@@ -181,15 +181,10 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('message:mark-read')
   async handleMarkRead(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { chatId: string },
+    @MessageBody() data: ChatRoomDto,
   ) {
     try {
-      const userId = client.data.userId;
-
-      if (!userId) {
-        client.emit('error', { message: 'Não autenticado' });
-        return;
-      }
+      const userId = this.requireUserId(client);
 
       await this.chatsService.markMessagesAsRead(data.chatId, userId);
       const roomName = `chat:${data.chatId}`;
@@ -202,53 +197,85 @@ export class ChatsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
 
       // 👇 Avisa as Salas Pessoais para atualizarem a bolinha vermelha na lista
-      const chatDetails = await this.chatsService.getChatDetails(data.chatId);
-      chatDetails.members.forEach((member) => {
-        this.server.to(`user:${member.userId}`).emit('chat:list-update');
-      });
+      await this.notifyMembersListUpdate(data.chatId);
 
       return { success: true };
-    } catch (error: any) {
-      console.error('[WS] Erro ao marcar como lido:', error);
+    } catch (error) {
+      this.logger.warn(`Erro ao marcar como lido: ${this.errorMessage(error)}`);
       client.emit('error', {
-        message: error.message || 'Erro ao marcar como lido',
+        message: this.errorMessage(error, 'Erro ao marcar como lido'),
       });
     }
   }
 
   @SubscribeMessage('editMessage')
   async handleEditMessage(
-    @MessageBody() data: { messageId: string; newText: string },
+    @MessageBody() data: SocketEditMessageDto,
     @ConnectedSocket() client: Socket,
   ) {
-    // Lógica para atualizar a mensagem no banco via chats.service
-    const updatedMessage = await this.chatsService.editMessage(
-      data.messageId,
-      data.newText,
-    );
-    // Emitir para a sala do chat
-    this.server
-      .to(`chat_${updatedMessage.chat.id}`)
-      .emit('messageEdited', updatedMessage);
+    try {
+      const userId = this.requireUserId(client);
+      const updatedMessage = await this.chatsService.editMessage(
+        data.messageId,
+        userId,
+        data.newText,
+      );
+      this.broadcastToChat(
+        updatedMessage.chatId,
+        'messageEdited',
+        updatedMessage,
+      );
+    } catch (error) {
+      client.emit('error', {
+        message: this.errorMessage(error, 'Erro ao editar mensagem'),
+      });
+    }
   }
 
   @SubscribeMessage('deleteMessage')
   async handleDeleteMessage(
-    @MessageBody() data: { messageId: string },
+    @MessageBody() data: SocketDeleteMessageDto,
     @ConnectedSocket() client: Socket,
   ) {
-    const deletedMessage = await this.chatsService.deleteMessage(
-      data.messageId,
-    );
-    this.server
-      .to(`chat_${deletedMessage.chat.id}`)
-      .emit('messageDeleted', deletedMessage);
+    try {
+      const userId = this.requireUserId(client);
+      const deletedMessage = await this.chatsService.deleteMessage(
+        data.messageId,
+        userId,
+      );
+      this.broadcastToChat(
+        deletedMessage.chatId,
+        'messageDeleted',
+        deletedMessage,
+      );
+    } catch (error) {
+      client.emit('error', {
+        message: this.errorMessage(error, 'Erro ao apagar mensagem'),
+      });
+    }
   }
 
   /**
    * Emitir para todos os clientes de um chat
    */
-  broadcastToChat(chatId: string, event: string, data: any) {
+  broadcastToChat(chatId: string, event: string, data: unknown) {
     this.server.to(`chat:${chatId}`).emit(event, data);
+  }
+
+  private async notifyMembersListUpdate(chatId: string) {
+    const memberIds = await this.chatsService.getMemberIds(chatId);
+    memberIds.forEach((memberId) => {
+      this.server.to(`user:${memberId}`).emit('chat:list-update');
+    });
+  }
+
+  private requireUserId(client: Socket): string {
+    const userId = socketUserId(client);
+    if (!userId) throw new WsException('Não autenticado');
+    return userId;
+  }
+
+  private errorMessage(error: unknown, fallback = 'Erro inesperado') {
+    return error instanceof Error && error.message ? error.message : fallback;
   }
 }

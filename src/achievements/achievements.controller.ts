@@ -7,27 +7,61 @@ import {
   Body,
   Param,
   UseGuards,
-  ForbiddenException,
-  Req,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { AchievementsService } from './achievements.service';
 import { UserRole } from 'src/users/entities/user.entity';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import {
+  AwardAchievementDto,
+  CreateAchievementDto,
+  RarityDto,
+  RarityOrderDto,
+  SetHighlightsDto,
+  SyncAchievementsDto,
+  UpdateAchievementDto,
+} from './dto/achievement.dto';
 
 @Controller('achievements')
 export class AchievementsController {
   constructor(private readonly achievementsService: AchievementsService) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @Get()
+  async findAll(
+    @Query('userId', new ParseUUIDPipe({ optional: true })) userId?: string,
+  ) {
+    return this.achievementsService.findAll(userId);
+  }
+
+  @Get('rarities')
+  async findAllRarities() {
+    return this.achievementsService.findAllRarities();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('highlights')
+  async setHighlights(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SetHighlightsDto,
+  ) {
+    return this.achievementsService.setHighlights(
+      user.userId,
+      dto.achievementIds,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Post('sync/:userId')
   async syncUserAchievements(
-    @Param('userId') userId: string,
-    @Body() dto: { prefix: string; count: number },
-    @Req() req: any,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: SyncAchievementsDto,
   ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
     await this.achievementsService.checkAndAwardByCondition(
       userId,
       dto.prefix,
@@ -36,131 +70,81 @@ export class AchievementsController {
     return { message: 'Sincronização concluída.' };
   }
 
-  @Get()
-  async findAll(@Query('userId') userId?: string) {
-    return this.achievementsService.findAll(userId);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Post()
-  async create(
-    @Body()
-    dto: {
-      title: string;
-      icon: string;
-      description?: string;
-      condition?: string;
-      rarityId?: string;
-      eventId?: string;
-    },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
+  async create(@Body() dto: CreateAchievementDto) {
     return this.achievementsService.create(dto);
   }
 
-  @UseGuards(AuthGuard('jwt'))
-  @Patch(':id')
-  async update(@Param('id') id: string, @Body() dto: any, @Req() req: any) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
-    return this.achievementsService.update(id, dto);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Delete(':id')
-  async remove(@Param('id') id: string, @Req() req: any) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
-    return this.achievementsService.remove(id);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Post('award')
-  async awardToUsers(
-    @Body() dto: { userIds: string[]; achievementId: string },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
+  async awardToUsers(@Body() dto: AwardAchievementDto) {
     return this.achievementsService.awardToUsers(
       dto.userIds,
       dto.achievementId,
     );
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Post('rarities')
+  async createRarity(@Body() dto: RarityDto) {
+    return this.achievementsService.createRarity(dto.name, dto.color);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch('rarities/order')
+  async updateRaritiesOrder(@Body() dto: RarityOrderDto) {
+    return this.achievementsService.updateRaritiesOrder(dto.rarityIds);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch('rarities/:id')
+  async updateRarity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RarityDto,
+  ) {
+    return this.achievementsService.updateRarity(id, dto.name, dto.color);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Delete('rarities/:id')
+  async removeRarity(@Param('id', ParseUUIDPipe) id: string) {
+    return this.achievementsService.removeRarity(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id')
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateAchievementDto,
+  ) {
+    return this.achievementsService.update(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Delete(':id/user/:userId')
   async removeAchievementFromUser(
-    @Param('id') achievementId: string,
-    @Param('userId') userId: string,
-    @Req() req: any,
+    @Param('id', ParseUUIDPipe) achievementId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
   ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
     return this.achievementsService.removeAchievementFromUser(
       userId,
       achievementId,
     );
   }
 
-  @UseGuards(AuthGuard('jwt'))
-  @Post('highlights')
-  async setHighlights(
-    @Body() dto: { achievementIds: string[] },
-    @Req() req: any,
-  ) {
-    return this.achievementsService.setHighlights(
-      req.user.userId,
-      dto.achievementIds,
-    );
-  }
-
-  @Get('rarities')
-  async findAllRarities() {
-    return this.achievementsService.findAllRarities();
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post('rarities')
-  async createRarity(
-    @Body() dto: { name: string; color: string },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
-    return this.achievementsService.createRarity(dto.name, dto.color);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Patch('rarities/:id')
-  async updateRarity(
-    @Param('id') id: string,
-    @Body() dto: { name: string; color: string },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
-    return this.achievementsService.updateRarity(id, dto.name, dto.color);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Delete('rarities/:id')
-  async removeRarity(@Param('id') id: string, @Req() req: any) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
-    return this.achievementsService.removeRarity(id);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Patch('rarities/order')
-  async updateRaritiesOrder(
-    @Body() dto: { rarityIds: string[] },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Acesso negado.');
-    return this.achievementsService.updateRaritiesOrder(dto.rarityIds);
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Delete(':id')
+  async remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.achievementsService.remove(id);
   }
 }

@@ -5,10 +5,11 @@ import { NotificationsController } from './notifications.controller';
 import { Notifications } from './entities/notifications.entity';
 import { User } from 'src/users/entities/user.entity';
 import { NotificationsGateway } from './notifications.gateway';
+import { AuthModule } from 'src/auth/auth.module';
 
 @Global() // Deixa global para o Posts e Reports Service usarem sem precisar importar toda hora
 @Module({
-  imports: [TypeOrmModule.forFeature([Notifications, User])],
+  imports: [TypeOrmModule.forFeature([Notifications, User]), AuthModule],
   controllers: [NotificationsController],
   providers: [NotificationsService, NotificationsGateway],
   exports: [NotificationsService, NotificationsGateway],

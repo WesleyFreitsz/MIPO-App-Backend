@@ -1,8 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Report } from './entities/report.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CreateReportDto } from './dto/create-report.dto';
 
 @Injectable()
 export class ReportsService {
@@ -12,11 +17,15 @@ export class ReportsService {
     private notificationsService: NotificationsService,
   ) {}
 
-  async createReport(reporterUserId: string, data: any) {
+  async createReport(reporterUserId: string, data: CreateReportDto) {
+    if (data.reportedUserId === reporterUserId) {
+      throw new BadRequestException('Você não pode denunciar a si mesmo.');
+    }
+
     // Usamos o undefined no lugar do null para satisfazer a tipagem DeepPartial do TypeORM
     const report = this.reportRepository.create({
       reason: data.reason,
-      imageUrl: data.imageUrl,
+      imageUrl: data.imageUrl ?? undefined,
       reporterUser: { id: reporterUserId },
       reportedUser: { id: data.reportedUserId },
       post: data.postId ? { id: data.postId } : undefined,

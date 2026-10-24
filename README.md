@@ -25,6 +25,21 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## Variáveis de ambiente
+
+Copie `.env.example` para `.env` e preencha os valores.
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `DIRECT_URL` | Sim | URL de conexão do Postgres. |
+| `JWT_SECRET` | Sim | Segredo usado para assinar os tokens. A API não sobe sem ele. |
+| `SUPABASE_URL` / `SUPABASE_KEY` | Sim | Storage usado nos uploads. |
+| `DB_SYNCHRONIZE` | Não | `true` faz o TypeORM ajustar o schema ao subir. Use só de forma pontual; o padrão é `false`. |
+| `DB_SSL` | Não | `verify` exige certificado válido (use no Neon). `false` desliga SSL (útil para Postgres local). Sem valor, usa SSL sem verificar o certificado. |
+| `DB_SSL_CA` | Não | Certificado da CA do banco (com `\n` no lugar das quebras). Quando preenchido, o certificado do servidor passa a ser verificado. |
+| `CORS_ORIGINS` | Não | Origens web permitidas, separadas por vírgula. Vazio bloqueia chamadas de navegador; o app mobile não é afetado. |
+| `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` | Não | SMTP para o e-mail de recuperação de senha. |
+
 ## Project setup
 
 ```bash

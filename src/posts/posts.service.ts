@@ -2,17 +2,21 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Post } from './entities/post.entity';
 import { PostComment } from './entities/post-comment.entity';
 import { PostLike } from './entities/post-like.entity';
 import { CreatePostDto } from './dto/create-post.dto';
+import { UpdatePostDto } from './dto/update-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../users/entities/user.entity';
 import { NotificationsGateway } from '../notifications/notifications.gateway'; // Importado para Real-time
+
+type PostWithCounts = Post & { likeCount?: number; commentCount?: number };
 
 @Injectable()
 export class PostsService {
@@ -28,48 +32,47 @@ export class PostsService {
   ) {}
 
   async createPost(userId: string, dto: CreatePostDto) {
+    if (!dto.content.trim() && !dto.imageUrl) {
+      throw new BadRequestException('O post precisa de texto ou imagem.');
+    }
+
     const post = this.postRepository.create({
       userId,
-      ...dto,
+      content: dto.content,
+      imageUrl: dto.imageUrl ?? null,
     });
     return this.postRepository.save(post);
   }
 
   async getFeed(userId: string, skip = 0, take = 20) {
-    const [posts, total] = await this.postRepository.findAndCount({
-      relations: ['user', 'likes', 'comments'],
-      order: { createdAt: 'DESC' },
+    const [posts, total] = await this.postsWithCountsQuery()
+      .orderBy('post.createdAt', 'DESC')
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
+
+    return {
+      data: await this.withLikeInfo(posts, userId),
+      total,
       skip,
       take,
-    });
-
-    const postsWithLikes = posts.map((post) => ({
-      ...post,
-      likeCount: post.likes?.length || 0,
-      commentCount: post.comments?.length || 0,
-      likedByUser: post.likes?.some((like) => like.userId === userId) || false,
-    }));
-
-    return { data: postsWithLikes, total, skip, take };
+    };
   }
 
-  async getUserPosts(userId: string, skip = 0, take = 20) {
-    const [posts, total] = await this.postRepository.findAndCount({
-      where: { userId },
-      relations: ['user', 'likes', 'comments'],
-      order: { createdAt: 'DESC' },
+  async getUserPosts(authorId: string, viewerId: string, skip = 0, take = 20) {
+    const [posts, total] = await this.postsWithCountsQuery()
+      .where('post.userId = :authorId', { authorId })
+      .orderBy('post.createdAt', 'DESC')
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
+
+    return {
+      data: await this.withLikeInfo(posts, viewerId),
+      total,
       skip,
       take,
-    });
-
-    const postsWithLikes = posts.map((post) => ({
-      ...post,
-      likeCount: post.likes?.length || 0,
-      commentCount: post.comments?.length || 0,
-      likedByUser: post.likes?.some((like) => like.userId === userId) || false,
-    }));
-
-    return { data: postsWithLikes, total, skip, take };
+    };
   }
 
   async getPost(postId: string, userId: string) {
@@ -90,15 +93,21 @@ export class PostsService {
     };
   }
 
-  async updatePost(postId: string, userId: string, dto: CreatePostDto) {
+  async updatePost(postId: string, userId: string, dto: UpdatePostDto) {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) throw new NotFoundException('Post não encontrado');
     if (post.userId !== userId)
-      throw new BadRequestException(
+      throw new ForbiddenException(
         'Você não tem permissão para atualizar este post',
       );
 
-    Object.assign(post, dto);
+    if (dto.content !== undefined) post.content = dto.content;
+    if (dto.imageUrl !== undefined) post.imageUrl = dto.imageUrl;
+
+    if (!post.content.trim() && !post.imageUrl) {
+      throw new BadRequestException('O post precisa de texto ou imagem.');
+    }
+
     return this.postRepository.save(post);
   }
 
@@ -106,7 +115,7 @@ export class PostsService {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) throw new NotFoundException('Post não encontrado');
     if (post.userId !== userId)
-      throw new BadRequestException(
+      throw new ForbiddenException(
         'Você não tem permissão para deletar este post',
       );
 
@@ -115,10 +124,7 @@ export class PostsService {
   }
 
   async likePost(postId: string, userId: string) {
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-      relations: ['likes'], // Necessário para contar os likes atualizados
-    });
+    const post = await this.postRepository.findOne({ where: { id: postId } });
 
     if (!post) throw new NotFoundException('Post não encontrado');
 
@@ -136,10 +142,9 @@ export class PostsService {
     this.notificationsGateway.broadcast({
       type: 'POST_LIKE_UPDATE',
       postId: postId,
-      likeCount: (post.likes?.length || 0) + 1,
+      likeCount: await this.likeRepository.count({ where: { postId } }),
     });
 
-    // Notificação Push para o dono do post
     // Notificação Push para o dono do post
     if (post.userId !== userId) {
       const liker = await this.postRepository.manager.findOne(User, {
@@ -166,7 +171,7 @@ export class PostsService {
     });
     if (!comment) throw new NotFoundException('Comentário não encontrado');
     if (comment.userId !== userId)
-      throw new BadRequestException(
+      throw new ForbiddenException(
         'Você não tem permissão para editar este comentário',
       );
 
@@ -184,18 +189,11 @@ export class PostsService {
     await this.likeRepository.remove(like);
 
     // --- LÓGICA EM TEMPO REAL ---
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-      relations: ['likes'],
+    this.notificationsGateway.broadcast({
+      type: 'POST_LIKE_UPDATE',
+      postId: postId,
+      likeCount: await this.likeRepository.count({ where: { postId } }),
     });
-
-    if (post) {
-      this.notificationsGateway.broadcast({
-        type: 'POST_LIKE_UPDATE',
-        postId: postId,
-        likeCount: post.likes?.length || 0,
-      });
-    }
 
     return { message: 'Like removido com sucesso' };
   }
@@ -204,7 +202,11 @@ export class PostsService {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) throw new NotFoundException('Post não encontrado');
 
-    const comment = this.commentRepository.create({ postId, userId, ...dto });
+    const comment = this.commentRepository.create({
+      postId,
+      userId,
+      content: dto.content,
+    });
     await this.commentRepository.save(comment);
 
     if (post.userId !== userId) {
@@ -240,14 +242,44 @@ export class PostsService {
   async deleteComment(commentId: string, userId: string) {
     const comment = await this.commentRepository.findOne({
       where: { id: commentId },
+      relations: ['post'],
     });
     if (!comment) throw new NotFoundException('Comentário não encontrado');
-    if (comment.userId !== userId)
-      throw new BadRequestException(
+    if (comment.userId !== userId && comment.post?.userId !== userId)
+      throw new ForbiddenException(
         'Você não tem permissão para deletar este comentário',
       );
 
     await this.commentRepository.remove(comment);
     return { message: 'Comentário deletado com sucesso' };
+  }
+
+  private postsWithCountsQuery() {
+    return this.postRepository
+      .createQueryBuilder('post')
+      .leftJoinAndSelect('post.user', 'user')
+      .loadRelationCountAndMap('post.likeCount', 'post.likes')
+      .loadRelationCountAndMap('post.commentCount', 'post.comments');
+  }
+
+  private async withLikeInfo(posts: PostWithCounts[], viewerId: string) {
+    const postIds = posts.map((post) => post.id);
+    const likedPostIds = new Set(
+      postIds.length > 0
+        ? (
+            await this.likeRepository.find({
+              where: { userId: viewerId, postId: In(postIds) },
+              select: { postId: true },
+            })
+          ).map((like) => like.postId)
+        : [],
+    );
+
+    return posts.map((post) => ({
+      ...post,
+      likeCount: post.likeCount ?? 0,
+      commentCount: post.commentCount ?? 0,
+      likedByUser: likedPostIds.has(post.id),
+    }));
   }
 }

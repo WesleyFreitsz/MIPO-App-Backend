@@ -2,31 +2,35 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  ForbiddenException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import {
-  Room,
-  RoomType,
-  ReservationStatus,
-  RoomParticipant,
-} from './entities/room.entity';
+import { In, Repository } from 'typeorm';
+import { Room, RoomType, RoomParticipant } from './entities/room.entity';
 import {
   SalinhaReservation,
   ReservationApprovalStatus,
 } from './entities/salinha-reservation.entity';
 import { ChatsService } from '../chats/chats.service';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { AuthenticatedUser } from '../auth/authenticated-user.interface';
+import { UserRole } from '../users/entities/user.entity';
+import { JoinRoomDto } from './dto/join-room.dto';
+import { ReserveSalinhaDto } from './dto/reserve-salinha.dto';
+import {
+  minutesNowInRoomsTimeZone,
+  normalizeTime,
+  timeRangesOverlap,
+  timeToMinutes,
+  todayInRoomsTimeZone,
+} from './room-time.util';
 
-interface JoinRoomDto {
-  date: string;
-  startTime: string;
-  endTime: string;
-  activity?: string;
-  activityType?: 'game' | 'custom';
-  isActivityPublic?: boolean;
+export const SALINHA_HOURLY_RATE = 10;
+
+export function calculateSalinhaPrice(startTime: string, endTime: string) {
+  const startHour = Number(startTime.split(':')[0]);
+  const endHour = Number(endTime.split(':')[0]);
+  return Math.max(1, endHour - startHour) * SALINHA_HOURLY_RATE;
 }
 
 @Injectable()
@@ -38,12 +42,16 @@ export class RoomsService {
     private reservationRepository: Repository<SalinhaReservation>,
     private chatsService: ChatsService,
     private usersService: UsersService,
+    private notificationsService: NotificationsService,
   ) {}
 
-  async findAll(skip = 0, take = 20, type?: RoomType, date?: string) {
-    console.log(
-      `[ROOMS] findAll chamado com: skip=${skip}, take=${take}, type=${type}, date=${date}`,
-    );
+  async findAll(
+    skip = 0,
+    take = 20,
+    type?: RoomType,
+    date?: string,
+    viewer?: AuthenticatedUser,
+  ) {
     const query = this.roomsRepository
       .createQueryBuilder('room')
       .leftJoinAndSelect('room.organizer', 'organizer')
@@ -60,60 +68,39 @@ export class RoomsService {
     }
 
     const rooms = await query.getMany();
-    console.log(`[ROOMS] findAll retornou ${rooms.length} salas`);
-
-    // Limpar atividades expiradas
-    const cleanedRooms = rooms.map((room) => {
-      this.cleanExpiredActivitiesInRoom(room);
-      return room;
-    });
-
-    // Salvar rooms com atividades limpas
-    await Promise.all(
-      cleanedRooms.map((room) => this.roomsRepository.save(room)),
+    return Promise.all(
+      rooms.map(async (room) => {
+        await this.ensureCurrentDay(room);
+        return this.buildRoomResponse(room, viewer);
+      }),
     );
-
-    return cleanedRooms.map((r) => this.formatRoomResponse(r));
   }
 
-  async findById(roomId: string) {
-    console.log(`[ROOMS] Buscando sala com ID: ${roomId}`);
-    const room = await this.roomsRepository.findOne({
-      where: { id: roomId },
-      relations: ['organizer'],
-    });
-
-    if (!room) {
-      console.log(`[ROOMS] ❌ Sala não encontrada: ${roomId}`);
-      throw new NotFoundException('Sala não encontrada.');
-    }
-
-    console.log(`[ROOMS] ✅ Sala encontrada: ${room.type}`);
-
-    // Limpar atividades expiradas
-    this.cleanExpiredActivitiesInRoom(room);
-    await this.roomsRepository.save(room);
-
-    return this.formatRoomResponse(room);
+  async findById(roomId: string, viewer?: AuthenticatedUser) {
+    const room = await this.findRoomOrFail(roomId);
+    await this.ensureCurrentDay(room);
+    return this.buildRoomResponse(room, viewer);
   }
 
   async joinRoom(roomId: string, userId: string, dto: JoinRoomDto) {
-    const room = await this.roomsRepository.findOne({
-      where: { id: roomId },
-      relations: ['organizer'],
-    });
+    const room = await this.findRoomOrFail(roomId);
+    await this.ensureCurrentDay(room);
 
-    if (!room) {
-      throw new NotFoundException('Sala não encontrada.');
+    if (room.type === RoomType.SALINHA) {
+      throw new BadRequestException(
+        'Para usar a salinha, faça uma reserva e aguarde a aprovação.',
+      );
     }
 
-    // Limpar atividades expiradas antes de adicionar novo participante
-    this.cleanExpiredActivitiesInRoom(room);
+    if (dto.date !== room.date) {
+      throw new BadRequestException(
+        'Só é possível marcar presença para o dia de hoje.',
+      );
+    }
+
+    this.assertValidTimeRange(dto.startTime, dto.endTime);
 
     const user = await this.usersService.findOne(userId);
-    if (!user) {
-      throw new UnauthorizedException('Usuário não encontrado.');
-    }
 
     // Verificar se já é participante
     const isAlreadyMember = room.participants.some((p) => p.userId === userId);
@@ -121,47 +108,14 @@ export class RoomsService {
       throw new BadRequestException('Você já está nesta sala.');
     }
 
-    // Para salinha, só pode se marcar presença se tiver aprovação
-    // Para outras salas, pode marcar presença sem aprovação
-    if (
-      room.type === RoomType.SALINHA &&
-      room.reservationStatus !== ReservationStatus.APPROVED
-    ) {
-      throw new BadRequestException('Esta reserva ainda não foi aprovada.');
-    }
-
-    // Verificar conflito de horários na salinha
-    if (room.type === RoomType.SALINHA) {
-      const hasTimeConflict = room.participants.some((p) => {
-        const userId1Start = parseInt(dto.startTime.split(':')[0] || '0');
-        const userId1End = parseInt(dto.endTime.split(':')[0] || '23');
-        const p2Start = parseInt(p.startTime.split(':')[0]);
-        const p2End = parseInt(p.endTime.split(':')[0]);
-
-        return userId1Start < p2End && userId1End > p2Start;
-      });
-
-      if (hasTimeConflict) {
-        throw new BadRequestException(
-          'Existe conflito de horário com outro participante nesta salinha.',
-        );
-      }
-    }
-
-    const startTime = dto.startTime || room.startTime;
-    const endTime = dto.endTime || room.endTime;
-
     const newParticipant: RoomParticipant = {
       userId,
       name: user.name,
-      activity: (dto.activity || room.activity || null) as string | null,
-      activityType: (dto.activityType || room.activityType || null) as
-        | 'game'
-        | 'custom'
-        | null,
+      activity: dto.activity || room.activity || null,
+      activityType: dto.activityType || room.activityType || null,
       isActivityPublic: dto.isActivityPublic ?? true,
-      startTime,
-      endTime,
+      startTime: normalizeTime(dto.startTime),
+      endTime: normalizeTime(dto.endTime),
       joinedAt: new Date(),
     };
 
@@ -172,7 +126,7 @@ export class RoomsService {
       const chat = await this.chatsService.createChat(room.organizerId, {
         name: `${room.type} - ${room.date}`,
       });
-      room.chatId = (chat as any).id;
+      room.chatId = chat.id;
     }
 
     if (room.chatId && room.organizerId) {
@@ -182,77 +136,23 @@ export class RoomsService {
     }
 
     await this.roomsRepository.save(room);
-    return this.formatRoomResponse(room);
+    return this.buildRoomResponse(room, {
+      userId,
+      name: user.name,
+      role: user.role,
+    });
   }
 
   async leaveRoom(roomId: string, userId: string) {
-    const room = await this.roomsRepository.findOne({
-      where: { id: roomId },
-    });
+    const room = await this.findRoomOrFail(roomId);
 
-    if (!room) {
-      throw new NotFoundException('Sala não encontrada.');
-    }
-
-    if (
-      room.organizerId === userId &&
-      room.type === RoomType.SALINHA &&
-      room.reservationStatus === ReservationStatus.APPROVED
-    ) {
-      throw new ForbiddenException(
-        'O organizador da salinha reservada não pode sair.',
-      );
+    if (!room.participants.some((p) => p.userId === userId)) {
+      throw new BadRequestException('Você não está nesta sala.');
     }
 
     room.participants = room.participants.filter((p) => p.userId !== userId);
-
-    if (room.participants.length === 0) {
-      await this.roomsRepository.remove(room);
-      return { message: 'Sala removida (sem participantes).' };
-    }
-
     await this.roomsRepository.save(room);
     return { message: 'Você saiu da sala.' };
-  }
-
-  async approveReservation(roomId: string, userId: string) {
-    const room = await this.roomsRepository.findOne({
-      where: { id: roomId },
-    });
-
-    if (!room) {
-      throw new NotFoundException('Sala não encontrada.');
-    }
-
-    if (room.type !== RoomType.SALINHA) {
-      throw new BadRequestException('Apenas salinhas precisam de aprovação.');
-    }
-
-    room.reservationStatus = ReservationStatus.APPROVED;
-    await this.roomsRepository.save(room);
-
-    return this.formatRoomResponse(room);
-  }
-
-  async cancelReservation(roomId: string, userId: string) {
-    const room = await this.roomsRepository.findOne({
-      where: { id: roomId },
-    });
-
-    if (!room) {
-      throw new NotFoundException('Sala não encontrada.');
-    }
-
-    if (room.organizerId !== userId && room.type === RoomType.SALINHA) {
-      throw new ForbiddenException(
-        'Apenas o organizador pode cancelar a reserva.',
-      );
-    }
-
-    room.reservationStatus = ReservationStatus.CANCELLED;
-    await this.roomsRepository.save(room);
-
-    return this.formatRoomResponse(room);
   }
 
   async getRoomParticipantsByTimeSlot(
@@ -260,40 +160,30 @@ export class RoomsService {
     date: string,
     startTime: string,
     endTime: string,
-    userId?: string,
-    isAdmin?: boolean,
+    viewer?: AuthenticatedUser,
   ) {
-    const room = await this.roomsRepository.findOne({
-      where: { id: roomId },
-      relations: ['organizer'],
-    });
+    const room = await this.findRoomOrFail(roomId);
+    await this.ensureCurrentDay(room);
 
-    if (!room) {
-      throw new NotFoundException('Sala não encontrada.');
-    }
+    const participants =
+      room.type === RoomType.SALINHA
+        ? await this.approvedSalinhaParticipants(date)
+        : room.date === date
+          ? this.withoutExpiredActivities(room.date, room.participants)
+          : [];
 
-    // Limpar atividades expiradas antes de retornar
-    this.cleanExpiredActivitiesInRoom(room);
-    await this.roomsRepository.save(room);
-
-    if (room.date !== date) {
-      return { participants: [], date, startTime, endTime };
-    }
-
-    // Filtrar participantes que estão no intervalo de horário
-    const startHour = parseInt(startTime.split(':')[0]);
-    const endHour = parseInt(endTime.split(':')[0]);
-
-    const filteredParticipants = room.participants
-      .filter((p) => {
-        const pStartHour = parseInt(p.startTime.split(':')[0]);
-        const pEndHour = parseInt(p.endTime.split(':')[0]);
-
-        return pStartHour < endHour && pEndHour > startHour;
-      })
+    const isAdmin = viewer?.role === UserRole.ADMIN;
+    const filteredParticipants = participants
+      .filter((p) =>
+        timeRangesOverlap(p.startTime, p.endTime, startTime, endTime),
+      )
       .filter((p) => {
         // Filtrar atividades privadas: só mostrar se for admin ou dono
-        if (p.isActivityPublic === false && !isAdmin && p.userId !== userId) {
+        if (
+          p.isActivityPublic === false &&
+          !isAdmin &&
+          p.userId !== viewer?.userId
+        ) {
           return false;
         }
         return true;
@@ -307,98 +197,78 @@ export class RoomsService {
     };
   }
 
-  async reserveSalinha(
-    userId: string,
-    dto: {
-      date: string;
-      startTime: string;
-      endTime: string;
-      totalPrice: number;
-    },
-  ) {
+  async reserveSalinha(userId: string, dto: ReserveSalinhaDto) {
     const user = await this.usersService.findOne(userId);
-    if (!user) {
-      throw new UnauthorizedException('Usuário não encontrado.');
-    }
 
-    // Buscar a salinha fixa
     const salinha = await this.roomsRepository.findOne({
       where: { type: RoomType.SALINHA },
-      relations: ['organizer'],
     });
-
     if (!salinha) {
       throw new NotFoundException('Salinha não encontrada.');
     }
 
-    // Verificar conflito de horários
-    const hasTimeConflict = salinha.participants.some((p) => {
-      const userStartHour = parseInt(dto.startTime.split(':')[0]);
-      const userEndHour = parseInt(dto.endTime.split(':')[0]);
-      const pStartHour = parseInt(p.startTime.split(':')[0]);
-      const pEndHour = parseInt(p.endTime.split(':')[0]);
+    this.assertValidTimeRange(dto.startTime, dto.endTime);
 
-      return userStartHour < pEndHour && userEndHour > pStartHour;
+    const today = todayInRoomsTimeZone();
+    if (dto.date < today) {
+      throw new BadRequestException(
+        'Não é possível reservar uma data passada.',
+      );
+    }
+    if (
+      dto.date === today &&
+      timeToMinutes(dto.startTime) < minutesNowInRoomsTimeZone()
+    ) {
+      throw new BadRequestException(
+        'Não é possível reservar um horário que já passou.',
+      );
+    }
+
+    const activeReservations = await this.reservationRepository.find({
+      where: {
+        date: dto.date,
+        status: In([
+          ReservationApprovalStatus.PENDING,
+          ReservationApprovalStatus.APPROVED,
+        ]),
+      },
     });
 
+    const hasTimeConflict = activeReservations.some((r) =>
+      timeRangesOverlap(dto.startTime, dto.endTime, r.startTime, r.endTime),
+    );
     if (hasTimeConflict) {
       throw new BadRequestException(
         'Já existe uma reserva neste horário da salinha.',
       );
     }
 
-    // Criar participante
-    const newParticipant: RoomParticipant = {
-      userId,
-      name: user.name,
-      activity: null,
-      activityType: null,
-      isActivityPublic: false,
-      startTime: dto.startTime,
-      endTime: dto.endTime,
-      joinedAt: new Date(),
-    };
+    const totalPrice = calculateSalinhaPrice(dto.startTime, dto.endTime);
 
-    // Adicionar participante
-    salinha.participants.push(newParticipant);
-    salinha.reservationStatus = ReservationStatus.PENDING;
-
-    // Criar chat se não existir
-    if (!salinha.chatId && salinha.organizerId) {
-      const chat = await this.chatsService.createChat(salinha.organizerId, {
-        name: `Salinha - ${salinha.date}`,
-      });
-      salinha.chatId = (chat as any).id;
-    }
-
-    // Adicionar user ao chat
-    if (salinha.chatId && salinha.organizerId) {
-      await this.chatsService.addMembers(salinha.chatId, salinha.organizerId, {
-        memberIds: [userId],
-      });
-    }
-
-    await this.roomsRepository.save(salinha);
-
-    // Criar registro de reserva para aprovação
     const reservation = this.reservationRepository.create({
       userId,
       date: dto.date,
-      startTime: dto.startTime,
-      endTime: dto.endTime,
-      totalPrice: dto.totalPrice,
+      startTime: normalizeTime(dto.startTime),
+      endTime: normalizeTime(dto.endTime),
+      totalPrice,
       status: ReservationApprovalStatus.PENDING,
     });
-
     await this.reservationRepository.save(reservation);
+
+    await this.notificationsService.notifyAdmins(
+      'Nova reserva da salinha',
+      `${user.nickname || user.name} pediu a salinha em ${dto.date}, das ${normalizeTime(dto.startTime)} às ${normalizeTime(dto.endTime)}.`,
+      { reservationId: reservation.id },
+    );
 
     return {
       message: 'Reserva enviada para aprovação.',
       reservation: {
-        date: dto.date,
-        startTime: dto.startTime,
-        endTime: dto.endTime,
-        totalPrice: dto.totalPrice,
+        id: reservation.id,
+        date: reservation.date,
+        startTime: reservation.startTime,
+        endTime: reservation.endTime,
+        totalPrice,
       },
     };
   }
@@ -415,107 +285,179 @@ export class RoomsService {
       userId: r.userId,
       user: r.user ? { name: r.user.name } : null,
       date: r.date,
-      startTime: r.startTime,
-      endTime: r.endTime,
-      totalPrice: r.totalPrice,
+      startTime: normalizeTime(r.startTime),
+      endTime: normalizeTime(r.endTime),
+      totalPrice: Number(r.totalPrice),
       status: r.status,
       createdAt: r.createdAt,
     }));
   }
 
   async approveSalinhaReservation(reservationId: string) {
-    const reservation = await this.reservationRepository.findOne({
-      where: { id: reservationId },
-    });
+    const reservation = await this.findReservationOrFail(reservationId);
 
-    if (!reservation) {
-      throw new NotFoundException('Reserva não encontrada.');
+    if (reservation.status !== ReservationApprovalStatus.PENDING) {
+      throw new BadRequestException('Esta reserva já foi processada.');
+    }
+
+    const approvedSameDay = await this.reservationRepository.find({
+      where: {
+        date: reservation.date,
+        status: ReservationApprovalStatus.APPROVED,
+      },
+    });
+    const conflicts = approvedSameDay.some((r) =>
+      timeRangesOverlap(
+        reservation.startTime,
+        reservation.endTime,
+        r.startTime,
+        r.endTime,
+      ),
+    );
+    if (conflicts) {
+      throw new BadRequestException(
+        'Já existe uma reserva aprovada neste horário.',
+      );
     }
 
     reservation.status = ReservationApprovalStatus.APPROVED;
     reservation.approvedAt = new Date();
     await this.reservationRepository.save(reservation);
 
-    // Atualizar status da salinha
-    const salinha = await this.roomsRepository.findOne({
-      where: { type: RoomType.SALINHA },
-    });
-
-    if (salinha) {
-      salinha.reservationStatus = ReservationStatus.APPROVED;
-      await this.roomsRepository.save(salinha);
-    }
+    await this.notificationsService.sendToUser(
+      reservation.userId,
+      'Reserva aprovada! 🎲',
+      `Sua reserva da salinha em ${reservation.date}, das ${normalizeTime(reservation.startTime)} às ${normalizeTime(reservation.endTime)}, foi aprovada.`,
+      'calendar',
+      'ALERT',
+      { reservationId: reservation.id },
+    );
 
     return { message: 'Reserva aprovada com sucesso.' };
   }
 
   async rejectSalinhaReservation(reservationId: string, reason: string) {
-    const reservation = await this.reservationRepository.findOne({
-      where: { id: reservationId },
-      relations: ['user'],
-    });
+    const reservation = await this.findReservationOrFail(reservationId);
 
-    if (!reservation) {
-      throw new NotFoundException('Reserva não encontrada.');
+    if (reservation.status === ReservationApprovalStatus.REJECTED) {
+      throw new BadRequestException('Esta reserva já foi rejeitada.');
     }
 
     reservation.status = ReservationApprovalStatus.REJECTED;
-    reservation.rejectionReason = reason;
+    reservation.rejectionReason = reason || null;
     await this.reservationRepository.save(reservation);
 
-    // Remover participante da salinha
-    const salinha = await this.roomsRepository.findOne({
-      where: { type: RoomType.SALINHA },
-    });
-
-    if (salinha) {
-      salinha.participants = salinha.participants.filter(
-        (p) => p.userId !== reservation.userId,
-      );
-      await this.roomsRepository.save(salinha);
-    }
+    await this.notificationsService.sendToUser(
+      reservation.userId,
+      'Reserva não aprovada',
+      reason
+        ? `Sua reserva da salinha em ${reservation.date} foi rejeitada: ${reason}`
+        : `Sua reserva da salinha em ${reservation.date} foi rejeitada.`,
+      'calendar',
+      'ALERT',
+      { reservationId: reservation.id },
+    );
 
     return { message: 'Reserva rejeitada.', reason };
   }
 
-  private cleanExpiredActivitiesInRoom(room: Room) {
-    const now = new Date();
-    const todayString = now.toISOString().split('T')[0]; // YYYY-MM-DD
-    const currentHours = now.getHours();
-    const currentMinutes = now.getMinutes();
+  private async findRoomOrFail(roomId: string) {
+    const room = await this.roomsRepository.findOne({
+      where: { id: roomId },
+      relations: ['organizer'],
+    });
+    if (!room) {
+      throw new NotFoundException('Sala não encontrada.');
+    }
+    return room;
+  }
 
-    room.participants = room.participants.map((p) => {
-      // Se a sala é de um dia anterior ao hoje, limpar atividades
-      if (room.date < todayString) {
-        return {
-          ...p,
-          activity: null,
-          activityType: null,
-        };
-      }
+  private async findReservationOrFail(reservationId: string) {
+    const reservation = await this.reservationRepository.findOne({
+      where: { id: reservationId },
+    });
+    if (!reservation) {
+      throw new NotFoundException('Reserva não encontrada.');
+    }
+    return reservation;
+  }
 
-      // Se é hoje, verificar se o endTime já passou
-      if (room.date === todayString) {
-        const [endHours, endMinutes] = p.endTime.split(':').map(Number);
+  private assertValidTimeRange(startTime: string, endTime: string) {
+    if (timeToMinutes(startTime) >= timeToMinutes(endTime)) {
+      throw new BadRequestException(
+        'O horário de término deve ser posterior ao horário de início.',
+      );
+    }
+  }
 
-        // Converter para minutos desde meia-noite para comparação mais fácil
-        const endTimeInMinutes = endHours * 60 + endMinutes;
-        const nowInMinutes = currentHours * 60 + currentMinutes;
+  private async ensureCurrentDay(room: Room) {
+    const today = todayInRoomsTimeZone();
+    if (room.date < today) {
+      room.date = today;
+      room.participants = [];
+      await this.roomsRepository.save(room);
+    }
+  }
 
-        if (nowInMinutes > endTimeInMinutes) {
-          return {
-            ...p,
-            activity: null,
-            activityType: null,
-          };
-        }
-      }
+  private async approvedSalinhaParticipants(
+    date: string,
+  ): Promise<RoomParticipant[]> {
+    const reservations = await this.reservationRepository.find({
+      where: { date, status: ReservationApprovalStatus.APPROVED },
+      relations: ['user'],
+      order: { startTime: 'ASC' },
+    });
 
-      return p;
+    return reservations.map((r) => ({
+      userId: r.userId,
+      name: r.user?.nickname || r.user?.name || 'Reserva',
+      activity: null,
+      activityType: null,
+      isActivityPublic: false,
+      startTime: normalizeTime(r.startTime),
+      endTime: normalizeTime(r.endTime),
+      joinedAt: r.approvedAt ?? r.createdAt,
+    }));
+  }
+
+  private withoutExpiredActivities(
+    roomDate: string,
+    participants: RoomParticipant[],
+  ): RoomParticipant[] {
+    const today = todayInRoomsTimeZone();
+    const nowInMinutes = minutesNowInRoomsTimeZone();
+
+    return participants.map((p) => {
+      const expired =
+        roomDate < today ||
+        (roomDate === today && nowInMinutes > timeToMinutes(p.endTime));
+      return expired ? { ...p, activity: null, activityType: null } : p;
     });
   }
 
-  private formatRoomResponse(room: Room) {
+  private maskPrivateActivities(
+    participants: RoomParticipant[],
+    viewer?: AuthenticatedUser,
+  ): RoomParticipant[] {
+    const isAdmin = viewer?.role === UserRole.ADMIN;
+    return participants.map((p) =>
+      p.isActivityPublic === false && !isAdmin && p.userId !== viewer?.userId
+        ? { ...p, activity: null, activityType: null }
+        : p,
+    );
+  }
+
+  private async buildRoomResponse(room: Room, viewer?: AuthenticatedUser) {
+    const participants =
+      room.type === RoomType.SALINHA
+        ? await this.approvedSalinhaParticipants(room.date)
+        : this.withoutExpiredActivities(room.date, room.participants);
+
+    const visibleParticipants = this.maskPrivateActivities(
+      participants,
+      viewer,
+    );
+
     return {
       id: room.id,
       type: room.type,
@@ -524,8 +466,8 @@ export class RoomsService {
       endTime: room.endTime,
       activity: room.activity,
       activityType: room.activityType,
-      participants: room.participants,
-      participantCount: room.participants.length,
+      participants: visibleParticipants,
+      participantCount: visibleParticipants.length,
       organizer: room.organizer
         ? { id: room.organizer.id, name: room.organizer.name }
         : null,

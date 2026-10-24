@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { Notifications } from './entities/notifications.entity';
@@ -6,8 +6,13 @@ import { User, UserRole } from 'src/users/entities/user.entity';
 import { Expo } from 'expo-server-sdk';
 import { NotificationsGateway } from './notifications.gateway';
 
+const BROADCAST_INSERT_CHUNK = 500;
+
+type NotificationData = Record<string, unknown>;
+
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
   private expo = new Expo();
   private readonly MAX_NOTIFICATIONS = 50;
 
@@ -23,7 +28,7 @@ export class NotificationsService {
     to: string | string[],
     title: string,
     body: string,
-    data?: any,
+    data?: NotificationData,
   ) {
     const tokens = Array.isArray(to) ? to : [to];
     const validTokens = tokens.filter((t) => Expo.isExpoPushToken(t));
@@ -43,7 +48,10 @@ export class NotificationsService {
       try {
         await this.expo.sendPushNotificationsAsync(chunk);
       } catch (error) {
-        console.error('Erro ao enviar push:', error);
+        this.logger.error(
+          'Erro ao enviar push',
+          error instanceof Error ? error.stack : undefined,
+        );
       }
     }
   }
@@ -55,9 +63,12 @@ export class NotificationsService {
     message: string,
     icon?: string,
     type: string = 'ALERT',
-    data?: any,
+    data?: NotificationData,
   ) {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: { id: true, notificationToken: true },
+    });
     if (!user) throw new NotFoundException('Usuário não encontrado');
 
     // 1. SEMPRE guarda na base de dados (mesmo sem Push)
@@ -105,9 +116,10 @@ export class NotificationsService {
     }
   }
 
-  async notifyAdmins(title: string, message: string, data?: any) {
+  async notifyAdmins(title: string, message: string, data?: NotificationData) {
     const admins = await this.userRepository.find({
       where: { role: UserRole.ADMIN },
+      select: { id: true, notificationToken: true },
     });
 
     const dbPromises = admins.map((admin) =>
@@ -144,20 +156,27 @@ export class NotificationsService {
     }
   }
 
-  async broadcast(title: string, message: string, icon?: string, data?: any) {
-    const users = await this.userRepository.find();
-    const dbPromises = users.map((user) =>
-      this.notifRepository.save(
-        this.notifRepository.create({
-          title,
-          message,
-          icon,
-          user,
-          data,
-        }),
-      ),
+  async broadcast(
+    title: string,
+    message: string,
+    icon?: string,
+    data?: NotificationData,
+  ) {
+    const users = await this.userRepository.find({
+      where: { banned: false },
+      select: { id: true, notificationToken: true },
+    });
+
+    const rows = users.map((user) =>
+      this.notifRepository.create({
+        title,
+        message,
+        icon,
+        data,
+        user: { id: user.id },
+      }),
     );
-    await Promise.all(dbPromises);
+    await this.notifRepository.save(rows, { chunk: BROADCAST_INSERT_CHUNK });
 
     this.notificationsGateway.broadcast({
       title,
@@ -186,8 +205,14 @@ export class NotificationsService {
     return { data, total, skip, take, hasMore: total > skip + take };
   }
 
-  async markAsRead(id: string) {
-    await this.notifRepository.update(id, { isRead: true });
+  async markAsRead(id: string, userId: string) {
+    const result = await this.notifRepository.update(
+      { id, user: { id: userId } },
+      { isRead: true },
+    );
+    if (!result.affected) {
+      throw new NotFoundException('Notificação não encontrada');
+    }
     return { message: 'Lida' };
   }
 

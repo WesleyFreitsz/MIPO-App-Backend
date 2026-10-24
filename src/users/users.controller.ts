@@ -4,84 +4,79 @@ import {
   Patch,
   Body,
   UseGuards,
-  Request,
-  Logger,
   Param,
-  ForbiddenException,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
 import { UpdateProfileDto } from 'src/auth/dto/update-profile.dto';
 import { UserRole } from './entities/user.entity';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
+import { AdjustCoinsDto } from './dto/adjust-coins.dto';
+import { SetBannedDto } from './dto/set-banned.dto';
+import { UpdateNotificationTokenDto } from './dto/update-notification-token.dto';
 
 @Controller('users')
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
-  private readonly logger = new Logger(UsersController.name);
-
   constructor(private readonly usersService: UsersService) {}
 
-  @UseGuards(AuthGuard('jwt'))
   @Get('profile')
-  getProfile(@Request() req: any) {
-    return this.usersService.findOne(req.user.userId);
+  getProfile(@CurrentUser() user: AuthenticatedUser) {
+    return this.usersService.findOne(user.userId);
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Get('admin/list')
-  async adminList(@Request() req: any, @Query('skip') skip = 0, @Query('take') take = 50) {
-    if (req.user.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem listar usuários.');
-    }
-    return this.usersService.findAllForAdmin(Number(skip), Number(take));
+  @Roles(UserRole.ADMIN)
+  async adminList(@Query() pagination: PaginationQueryDto) {
+    return this.usersService.findAllForAdmin(pagination.skip, pagination.take);
   }
 
-  @UseGuards(AuthGuard('jwt'))
-  @Patch(':id/coins')
-  async adminAddCoins(@Request() req: any, @Param('id') id: string, @Body() body: { amount?: number }) {
-    if (req.user.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem ajustar moedas.');
-    }
-    return this.usersService.addCoins(id, body?.amount ?? 1);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Patch(':id/ban')
-  async adminBan(@Request() req: any, @Param('id') id: string, @Body() body: { banned?: boolean }) {
-    if (req.user.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem banir usuários.');
-    }
-    return this.usersService.setBanned(id, body?.banned ?? true);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Get(':id')
-  getUserById(@Param('id') userId: string) {
-    return this.usersService.findOne(userId);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
   @Patch('notification-token')
-  async updateToken(@Request() req, @Body() body: any) {
-    this.logger.log(
-      `[DEBUG] Rota updateToken chamada pelo user: ${req.user.userId}`,
+  async updateToken(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateNotificationTokenDto,
+  ) {
+    return this.usersService.updateNotificationToken(
+      user.userId,
+      dto.token || null,
     );
-    this.logger.log(
-      `[DEBUG] Body recebido no Controller: ${JSON.stringify(body)}`,
-    );
-
-    const token = body.token;
-
-    this.logger.log(`[DEBUG] Token extraído: ${token} (Tipo: ${typeof token})`);
-
-    return this.usersService.update(req.user.userId, {
-      notificationToken: token,
-    });
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Patch('profile')
-  updateProfile(@Request() req, @Body() dto: UpdateProfileDto) {
-    return this.usersService.updateProfile(req.user.userId, dto);
+  updateProfile(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    return this.usersService.updateProfile(user.userId, dto);
+  }
+
+  @Patch(':id/coins')
+  @Roles(UserRole.ADMIN)
+  async adminAddCoins(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdjustCoinsDto,
+  ) {
+    return this.usersService.addCoins(id, dto.amount ?? 1);
+  }
+
+  @Patch(':id/ban')
+  @Roles(UserRole.ADMIN)
+  async adminBan(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetBannedDto,
+  ) {
+    return this.usersService.setBanned(admin.userId, id, dto.banned ?? true);
+  }
+
+  @Get(':id')
+  getUserById(@Param('id', ParseUUIDPipe) userId: string) {
+    return this.usersService.findOne(userId);
   }
 }

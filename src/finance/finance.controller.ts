@@ -1,52 +1,33 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  UseGuards,
-  ForbiddenException,
-  Req,
-  Query,
-} from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { Controller, Get, Post, Body, UseGuards, Query } from '@nestjs/common';
 import { FinanceService } from './finance.service';
 import { UserRole } from 'src/users/entities/user.entity';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
+import { CreateTransactionDto } from './dto/create-transaction.dto';
 
 @Controller('finance')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN)
 export class FinanceController {
   constructor(private readonly financeService: FinanceService) {}
 
-  @UseGuards(AuthGuard('jwt'))
   @Get('summary')
-  async getSummary(@Req() req: any) {
-    if (req?.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem ver o resumo financeiro.');
-    }
+  async getSummary() {
     return this.financeService.getSummary();
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Get('transactions')
-  async getTransactions(
-    @Req() req: any,
-    @Query('skip') skip = 0,
-    @Query('take') take = 50,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem ver transações.');
-    }
-    return this.financeService.getTransactions(Number(skip), Number(take));
+  async getTransactions(@Query() pagination: PaginationQueryDto) {
+    return this.financeService.getTransactions(
+      pagination.skip,
+      pagination.take,
+    );
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Post('transactions')
-  async create(
-    @Body() dto: { description: string; value: number; type: 'in' | 'out' },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem registrar transações.');
-    }
+  async create(@Body() dto: CreateTransactionDto) {
     return this.financeService.create(dto);
   }
 }

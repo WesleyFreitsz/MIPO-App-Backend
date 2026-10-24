@@ -28,13 +28,13 @@ export class User {
   @OneToMany(() => UserAchievement, (userAchievement) => userAchievement.user)
   achievements: UserAchievement[];
 
-  @Column({ type: 'varchar', unique: true, nullable: true })
+  @Column({ type: 'varchar', unique: true, nullable: true, select: false })
   email: string | null;
 
-  @Column({ type: 'varchar', unique: true, nullable: true })
+  @Column({ type: 'varchar', unique: true, nullable: true, select: false })
   phoneNumber: string | null;
 
-  @Column()
+  @Column({ select: false })
   password: string;
 
   // Perfil
@@ -75,12 +75,15 @@ export class User {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @Column({ type: 'varchar', nullable: true })
+  @Column({ type: 'varchar', nullable: true, select: false })
   notificationToken: string | null;
 
-  @Column({ type: 'varchar', nullable: true })
+  @Column({ type: 'varchar', nullable: true, select: false })
   recoveryCode: string | null;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamp', nullable: true, select: false })
   recoveryCodeExpires: Date | null;
+
+  @Column({ type: 'int', default: 0, select: false })
+  recoveryAttempts: number;
 }

@@ -2,17 +2,25 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Like } from 'typeorm';
 import { Achievement } from './entities/achievement.entity';
 import { Rarity } from './entities/rarity.entity';
 import { User } from 'src/users/entities/user.entity';
+import { Event } from 'src/events/entities/event.entity';
 import { UserAchievement } from 'src/users/entities/user-achievement.entity';
 import { NotificationsService } from 'src/notifications/notifications.service';
+import {
+  CreateAchievementDto,
+  UpdateAchievementDto,
+} from './dto/achievement.dto';
 
 @Injectable()
 export class AchievementsService {
+  private readonly logger = new Logger(AchievementsService.name);
+
   constructor(
     @InjectRepository(Achievement)
     private achievementsRepository: Repository<Achievement>,
@@ -39,26 +47,32 @@ export class AchievementsService {
 
     const userAchievementIds = userAchievements.map((ua) => ua.achievement.id);
 
-    return Promise.all(
-      achievements.map(async (ach) => {
-        const ownersCount = await this.userAchievementRepository.count({
-          where: { achievement: { id: ach.id } },
-        });
-
-        const userAchRecord = userAchievements.find(
-          (ua) => ua.achievement.id === ach.id,
-        );
-
-        return {
-          ...ach,
-          obtainedPercentage:
-            totalUsers > 0 ? (ownersCount / totalUsers) * 100 : 0,
-          isObtained: userAchievementIds.includes(ach.id),
-          isHighlighted: userAchRecord?.isHighlighted || false,
-          acquiredAt: userAchRecord?.acquiredAt || null,
-        };
-      }),
+    const ownersCountRows = await this.userAchievementRepository
+      .createQueryBuilder('ua')
+      .select('"ua"."achievementId"', 'achievementId')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('"ua"."achievementId"')
+      .getRawMany<{ achievementId: string; count: string }>();
+    const ownersCountByAchievement = new Map(
+      ownersCountRows.map((row) => [row.achievementId, Number(row.count)]),
     );
+
+    return achievements.map((ach) => {
+      const ownersCount = ownersCountByAchievement.get(ach.id) ?? 0;
+
+      const userAchRecord = userAchievements.find(
+        (ua) => ua.achievement.id === ach.id,
+      );
+
+      return {
+        ...ach,
+        obtainedPercentage:
+          totalUsers > 0 ? (ownersCount / totalUsers) * 100 : 0,
+        isObtained: userAchievementIds.includes(ach.id),
+        isHighlighted: userAchRecord?.isHighlighted || false,
+        acquiredAt: userAchRecord?.acquiredAt || null,
+      };
+    });
   }
 
   async checkAndAwardByCondition(
@@ -82,36 +96,34 @@ export class AchievementsService {
 
   // --- GESTÃO DE CONQUISTAS ---
 
-  async create(dto: {
-    title: string;
-    icon: string;
-    description?: string;
-    condition?: string;
-    rarityId?: string;
-    eventId?: string;
-  }) {
+  async create(dto: CreateAchievementDto) {
     const achievement = this.achievementsRepository.create({
       title: dto.title,
       icon: dto.icon,
       description: dto.description || null,
       condition: dto.condition || null, // AGORA SALVA A CONDIÇÃO
-      rarity: dto.rarityId ? ({ id: dto.rarityId } as any) : null,
-      linkedEvent: dto.eventId ? ({ id: dto.eventId } as any) : null,
+      rarity: dto.rarityId ? { id: dto.rarityId } : null,
+      linkedEvent: dto.eventId ? { id: dto.eventId } : null,
     });
     return this.achievementsRepository.save(achievement);
   }
 
-  async update(id: string, dto: any) {
+  async update(id: string, dto: UpdateAchievementDto) {
     const ach = await this.achievementsRepository.findOne({ where: { id } });
     if (!ach) throw new NotFoundException('Conquista não encontrada.');
 
+    if (dto.title !== undefined) ach.title = dto.title;
+    if (dto.icon !== undefined) ach.icon = dto.icon;
+    if (dto.description !== undefined)
+      ach.description = dto.description || null;
+    if (dto.condition !== undefined) ach.condition = dto.condition || null;
+
     // Converte os IDs de relação caso venham na edição
     if (dto.rarityId !== undefined)
-      dto.rarity = dto.rarityId ? { id: dto.rarityId } : null;
+      ach.rarity = dto.rarityId ? ({ id: dto.rarityId } as Rarity) : null;
     if (dto.eventId !== undefined)
-      dto.linkedEvent = dto.eventId ? { id: dto.eventId } : null;
+      ach.linkedEvent = dto.eventId ? ({ id: dto.eventId } as Event) : null;
 
-    Object.assign(ach, dto);
     return this.achievementsRepository.save(ach);
   }
 
@@ -158,9 +170,9 @@ export class AchievementsService {
             { achievementId: achievement.id },
           );
         } catch (error) {
-          console.error(
+          this.logger.error(
             `Falha ao notificar o usuário ${userId} sobre a conquista`,
-            error,
+            error instanceof Error ? error.stack : undefined,
           );
         }
       }

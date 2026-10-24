@@ -2,139 +2,127 @@ import {
   Controller,
   Get,
   Post,
-  Delete,
   Patch,
   Body,
   Param,
   UseGuards,
-  Request,
   Query,
-  ForbiddenException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { RoomsService } from './rooms.service';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { OptionalJwtAuthGuard } from 'src/auth/optional-jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { UserRole } from 'src/users/entities/user.entity';
+import { JoinRoomDto } from './dto/join-room.dto';
+import { ReserveSalinhaDto } from './dto/reserve-salinha.dto';
+import {
+  RejectReservationDto,
+  RoomParticipantsQueryDto,
+  RoomsQueryDto,
+} from './dto/rooms-query.dto';
 
 @Controller('rooms')
 export class RoomsController {
   constructor(private readonly roomsService: RoomsService) {}
 
+  @UseGuards(OptionalJwtAuthGuard)
   @Get()
   async findAll(
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
-    @Query('type') type?: string,
-    @Query('date') date?: string,
+    @Query() query: RoomsQueryDto,
+    @CurrentUser() viewer?: AuthenticatedUser,
   ) {
     return this.roomsService.findAll(
-      Number(skip),
-      Number(take),
-      type as any,
-      date,
+      query.skip,
+      query.take,
+      query.type,
+      query.date,
+      viewer,
     );
   }
 
-  @Get('debug/all')
-  async debugAllRooms() {
-    return this.roomsService.findAll(0, 100);
-  }
-
-  @Get(':id')
-  async findById(@Param('id') roomId: string) {
-    return this.roomsService.findById(roomId);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post(':id/join')
-  async join(
-    @Param('id') roomId: string,
-    @Request() req: any,
-    @Body()
-    dto: {
-      date: string;
-      startTime: string;
-      endTime: string;
-      activity?: string;
-      activityType?: 'game' | 'custom';
-      isActivityPublic?: boolean;
-    },
-  ) {
-    return this.roomsService.joinRoom(roomId, req.user.userId, dto);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post(':id/leave')
-  async leave(@Param('id') roomId: string, @Request() req: any) {
-    return this.roomsService.leaveRoom(roomId, req.user.userId);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post(':id/approve')
-  async approveReservation(@Param('id') roomId: string, @Request() req: any) {
-    const room = await this.roomsService.findById(roomId);
-    if (room.organizerId !== req.user.userId) {
-      throw new ForbiddenException(
-        'Apenas o organizador pode aprovar a reserva.',
-      );
-    }
-    return this.roomsService.approveReservation(roomId, req.user.userId);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post(':id/cancel')
-  async cancelReservation(@Param('id') roomId: string, @Request() req: any) {
-    return this.roomsService.cancelReservation(roomId, req.user.userId);
-  }
-
-  @Get(':id/participants')
-  async getParticipantsByTimeSlot(
-    @Param('id') roomId: string,
-    @Query('date') date: string,
-    @Query('startTime') startTime: string,
-    @Query('endTime') endTime: string,
-  ) {
-    return this.roomsService.getRoomParticipantsByTimeSlot(
-      roomId,
-      date,
-      startTime,
-      endTime,
-    );
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post('salinha/reserve')
-  async reserveSalinha(
-    @Request() req: any,
-    @Body()
-    dto: {
-      date: string;
-      startTime: string;
-      endTime: string;
-      totalPrice: number;
-    },
-  ) {
-    return this.roomsService.reserveSalinha(req.user.userId, dto);
-  }
-
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Get('salinha/reservations/pending')
   async getPendingReservations() {
     return this.roomsService.getPendingReservations();
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
+  @Post('salinha/reserve')
+  async reserveSalinha(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ReserveSalinhaDto,
+  ) {
+    return this.roomsService.reserveSalinha(user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Patch('salinha/reservations/:id/approve')
-  async approveSalinhaReservation(@Param('id') reservationId: string) {
+  async approveSalinhaReservation(
+    @Param('id', ParseUUIDPipe) reservationId: string,
+  ) {
     return this.roomsService.approveSalinhaReservation(reservationId);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Patch('salinha/reservations/:id/reject')
   async rejectSalinhaReservation(
-    @Param('id') reservationId: string,
-    @Body() dto: { reason: string },
+    @Param('id', ParseUUIDPipe) reservationId: string,
+    @Body() dto: RejectReservationDto,
   ) {
     return this.roomsService.rejectSalinhaReservation(
       reservationId,
-      dto.reason,
+      dto.reason ?? '',
     );
+  }
+
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get(':id')
+  async findById(
+    @Param('id') roomId: string,
+    @CurrentUser() viewer?: AuthenticatedUser,
+  ) {
+    return this.roomsService.findById(roomId, viewer);
+  }
+
+  @UseGuards(OptionalJwtAuthGuard)
+  @Get(':id/participants')
+  async getParticipantsByTimeSlot(
+    @Param('id') roomId: string,
+    @Query() query: RoomParticipantsQueryDto,
+    @CurrentUser() viewer?: AuthenticatedUser,
+  ) {
+    return this.roomsService.getRoomParticipantsByTimeSlot(
+      roomId,
+      query.date,
+      query.startTime,
+      query.endTime,
+      viewer,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/join')
+  async join(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') roomId: string,
+    @Body() dto: JoinRoomDto,
+  ) {
+    return this.roomsService.joinRoom(roomId, user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/leave')
+  async leave(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') roomId: string,
+  ) {
+    return this.roomsService.leaveRoom(roomId, user.userId);
   }
 }

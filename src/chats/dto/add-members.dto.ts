@@ -1,7 +1,8 @@
-import { IsArray, IsUUID } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsUUID } from 'class-validator';
 
 export class AddMembersDto {
   @IsArray()
+  @ArrayMaxSize(200)
   @IsUUID('4', { each: true })
   memberIds: string[];
 }

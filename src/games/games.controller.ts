@@ -7,77 +7,58 @@ import {
   Body,
   Param,
   UseGuards,
-  ForbiddenException,
-  Req,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { GamesService } from './games.service';
 import { UserRole } from 'src/users/entities/user.entity';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CreateGameDto, GamesQueryDto, UpdateGameDto } from './dto/game.dto';
 
 @Controller('games')
 export class GamesController {
   constructor(private readonly gamesService: GamesService) {}
 
   @Get()
-  async findAll(@Query() query: any) {
+  async findAll(@Query() query: GamesQueryDto) {
     return this.gamesService.findAll(query);
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.gamesService.findOne(id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Post()
-  async create(
-    @Body()
-    dto: {
-      name: string;
-      description?: string;
-      category: string[]; // Aceita array agora
-      minPlayers: number;
-      maxPlayers: number;
-      imageUrl: string;
-      videoUrl?: string;
-      isFeatured?: boolean;
-    },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException(
-        'Apenas administradores podem cadastrar jogos.',
-      );
-    }
+  async create(@Body() dto: CreateGameDto) {
     return this.gamesService.create(dto);
   }
 
-  @UseGuards(AuthGuard('jwt'))
-  @Patch(':id')
-  async update(
-    @Param('id') id: string,
-    @Body() dto: Partial<any>,
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Apenas admins podem editar.');
-    return this.gamesService.update(id, dto);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Patch(':id/feature')
-  async toggleFeature(@Param('id') id: string, @Req() req: any) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Apenas admins podem destacar.');
+  async toggleFeature(@Param('id', ParseUUIDPipe) id: string) {
     return this.gamesService.toggleFeatured(id);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id')
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateGameDto,
+  ) {
+    return this.gamesService.update(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Delete(':id')
-  async remove(@Param('id') id: string, @Req() req: any) {
-    if (req?.user?.role !== UserRole.ADMIN)
-      throw new ForbiddenException('Apenas admins podem excluir.');
+  async remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.gamesService.remove(id);
   }
 }

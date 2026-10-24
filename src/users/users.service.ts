@@ -2,12 +2,18 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { UpdateProfileDto } from 'src/auth/dto/update-profile.dto';
+
+type ProfileFields = Pick<
+  User,
+  'name' | 'nickname' | 'city' | 'bio' | 'avatarUrl' | 'age'
+>;
 
 @Injectable()
 export class UsersService {
@@ -21,45 +27,7 @@ export class UsersService {
   async findOne(id: string) {
     const user = await this.usersRepository.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuário não encontrado');
-    const { password, ...result } = user;
-    return result;
-  }
-
-  /**
-   * Atualização segura e blindada contra UpdateValuesMissingError
-   */
-  async update(id: string, data: Partial<User>) {
-    // Função helper para limpar dados (melhora tipagem)
-    const cleanData = this.cleanPartialData(data);
-
-    if (Object.keys(cleanData).length === 0) {
-      this.logger.warn(
-        `[UPDATE] Tentativa de update VAZIO ignorada para usuário ${id}`,
-      );
-      return this.findOne(id);
-    }
-
-    try {
-      await this.usersRepository.update(id, cleanData);
-      this.logger.debug(`[UPDATE] Sucesso ao atualizar usuário ${id}`);
-    } catch (error: any) {
-      this.logger.error(
-        `[UPDATE] Erro ao atualizar usuário ${id}: ${error.message}`,
-      );
-      throw error;
-    }
-
-    return this.findOne(id);
-  }
-
-  private cleanPartialData(data: Partial<User>): Partial<User> {
-    return Object.entries(data).reduce<Partial<User>>((acc, [key, value]) => {
-      if (value !== undefined && value !== null) {
-        // @ts-expect-error Suppress se TS ainda reclamar de mismatch
-        acc[key as keyof User] = value;
-      }
-      return acc;
-    }, {});
+    return user;
   }
 
   async findAllForAdmin(skip = 0, take = 50) {
@@ -70,52 +38,62 @@ export class UsersService {
       // Relações adicionadas aqui para o AdminAchievementsScreen funcionar corretamente:
       relations: ['achievements', 'achievements.achievement'],
     });
-    const result = users.map((u) => {
-      const { password, ...rest } = u;
-      return rest;
-    });
-    return { data: result };
+    return { data: users };
   }
 
   async addCoins(id: string, amount: number) {
-    const user = await this.usersRepository.findOne({ where: { id } });
-    if (!user) throw new NotFoundException('Usuário não encontrado.');
-    user.coins = (user.coins || 0) + amount;
-    await this.usersRepository.save(user);
+    await this.findOne(id);
+    await this.usersRepository.increment({ id }, 'coins', amount);
     return this.findOne(id);
   }
 
-  async setBanned(id: string, banned: boolean) {
-    return this.update(id, { banned });
+  async setBanned(adminId: string, id: string, banned: boolean) {
+    if (adminId === id) {
+      throw new BadRequestException('Você não pode banir a própria conta.');
+    }
+    await this.findOne(id);
+    await this.usersRepository.update(id, { banned });
+    return this.findOne(id);
+  }
+
+  async updateNotificationToken(id: string, token: string | null) {
+    await this.usersRepository.update(id, { notificationToken: token });
+    this.logger.debug(`[PUSH] Token de notificação atualizado para ${id}`);
+    return { message: 'Token de notificação atualizado.' };
   }
 
   async updateProfile(id: string, dto: UpdateProfileDto) {
     this.logger.debug(`[PROFILE] Iniciando updateProfile para ID ${id}`);
 
-    const user = await this.usersRepository.findOne({ where: { id } });
-    if (!user) throw new NotFoundException('Usuário não encontrado');
+    await this.findOne(id);
 
     // Verifica nickname único
     if (dto.nickname) {
       const nickExists = await this.usersRepository.findOne({
         where: { nickname: dto.nickname },
+        select: { id: true },
       });
       if (nickExists && nickExists.id !== id) {
         throw new ConflictException('Este nickname já está em uso.');
       }
     }
 
-    // Se o dto.avatarUrl contiver a string Base64, ela substituirá a antiga na mesma coluna.
-    const updateData = {
-      ...dto,
-      isProfileComplete: true,
-    };
+    const profileFields: Partial<ProfileFields> = {};
+    if (dto.name != null) profileFields.name = dto.name;
+    if (dto.nickname != null) profileFields.nickname = dto.nickname;
+    if (dto.city != null) profileFields.city = dto.city;
+    if (dto.bio != null) profileFields.bio = dto.bio;
+    if (dto.avatarUrl != null) profileFields.avatarUrl = dto.avatarUrl;
+    if (dto.age != null) profileFields.age = dto.age;
 
-    const result = await this.update(id, updateData);
+    await this.usersRepository.update(id, {
+      ...profileFields,
+      isProfileComplete: true,
+    });
 
     this.logger.debug(
       `[PROFILE] updateProfile concluído com sucesso para ID ${id}`,
     );
-    return result;
+    return this.findOne(id);
   }
 }

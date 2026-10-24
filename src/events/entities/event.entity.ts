@@ -37,11 +37,11 @@ export class Event {
   @Column({ type: 'enum', enum: EventSpace })
   space: EventSpace;
 
-  @Column({ nullable: true })
-  customLocation: string;
+  @Column({ type: 'varchar', nullable: true })
+  customLocation: string | null;
 
-  @Column({ nullable: true })
-  bannerUrl: string;
+  @Column({ type: 'varchar', nullable: true })
+  bannerUrl: string | null;
 
   @Column('timestamp')
   dateTime: Date;
@@ -49,12 +49,12 @@ export class Event {
   @Column({ type: 'enum', enum: EventStatus, default: EventStatus.PENDING })
   status: EventStatus;
 
-  @Column({ nullable: true })
-  rejectionReason: string;
+  @Column({ type: 'varchar', nullable: true })
+  rejectionReason: string | null;
 
   // 👇 NOVA COLUNA ADICIONADA AQUI PARA SALVAR O CHAT 👇
-  @Column({ nullable: true })
-  chatId: string;
+  @Column({ type: 'varchar', nullable: true })
+  chatId: string | null;
 
   @ManyToOne(() => User)
   creator: User;

@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -19,8 +20,8 @@ export class FriendsService {
     private friendshipRepository: Repository<Friendship>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-    private notificationsService: NotificationsService, 
-    private achievementsService: AchievementsService, 
+    private notificationsService: NotificationsService,
+    private achievementsService: AchievementsService,
   ) {}
 
   /**
@@ -31,7 +32,7 @@ export class FriendsService {
       where: { id: dto.friendId },
     });
 
-    if (!friendUser) {
+    if (!friendUser || friendUser.banned) {
       throw new NotFoundException('Usuário não encontrado');
     }
 
@@ -48,6 +49,11 @@ export class FriendsService {
     });
 
     if (existingFriendship) {
+      if (existingFriendship.status === FriendshipStatus.BLOCKED) {
+        throw new ForbiddenException(
+          'Não é possível enviar solicitação para este usuário',
+        );
+      }
       if (existingFriendship.status === FriendshipStatus.ACCEPTED) {
         throw new ConflictException('Você já é amigo deste usuário');
       }
@@ -115,12 +121,14 @@ export class FriendsService {
   async acceptFriendRequest(userId: string, friendshipId: string) {
     const friendship = await this.friendshipRepository.findOne({
       where: { id: friendshipId },
-      relations: ['user', 'friend'], 
+      relations: ['user', 'friend'],
     });
 
     if (!friendship) throw new NotFoundException('Solicitação não encontrada');
-    if (friendship.friendId !== userId) throw new BadRequestException('Você não pode aceitar esta solicitação');
-    if (friendship.status !== FriendshipStatus.PENDING) throw new BadRequestException('Esta solicitação já foi processada');
+    if (friendship.friendId !== userId)
+      throw new BadRequestException('Você não pode aceitar esta solicitação');
+    if (friendship.status !== FriendshipStatus.PENDING)
+      throw new BadRequestException('Esta solicitação já foi processada');
 
     friendship.status = FriendshipStatus.ACCEPTED;
     const saved = await this.friendshipRepository.save(friendship);
@@ -142,8 +150,10 @@ export class FriendsService {
 
     await syncFriendsAchievements(friendship.userId);
     await syncFriendsAchievements(friendship.friendId);
-    
-    const acceptor = await this.usersRepository.findOne({ where: { id: userId } });
+
+    const acceptor = await this.usersRepository.findOne({
+      where: { id: userId },
+    });
     if (acceptor) {
       await this.notificationsService.sendToUser(
         friendship.userId,
@@ -157,7 +167,6 @@ export class FriendsService {
 
     return saved;
   }
-
 
   /**
    * Rejeitar solicitação de amizade
@@ -186,11 +195,13 @@ export class FriendsService {
   /**
    * Remover amigo
    */
-  async removeFriend(userId: string, friendId: string) {
+  async removeFriend(userId: string, friendIdOrFriendshipId: string) {
     const friendship = await this.friendshipRepository.findOne({
       where: [
-        { userId, friendId },
-        { userId: friendId, friendId: userId },
+        { id: friendIdOrFriendshipId, userId },
+        { id: friendIdOrFriendshipId, friendId: userId },
+        { userId, friendId: friendIdOrFriendshipId },
+        { userId: friendIdOrFriendshipId, friendId: userId },
       ],
     });
 
@@ -198,12 +209,21 @@ export class FriendsService {
       throw new NotFoundException('Amizade não encontrada');
     }
 
-    if (friendship.status !== FriendshipStatus.ACCEPTED) {
-      throw new BadRequestException('Esta amizade não foi aceita');
+    if (
+      friendship.status === FriendshipStatus.BLOCKED &&
+      friendship.userId !== userId
+    ) {
+      throw new NotFoundException('Amizade não encontrada');
     }
 
     await this.friendshipRepository.remove(friendship);
-    return { message: 'Amizade removida com sucesso' };
+
+    const messages: Record<FriendshipStatus, string> = {
+      [FriendshipStatus.ACCEPTED]: 'Amizade removida com sucesso',
+      [FriendshipStatus.PENDING]: 'Solicitação cancelada com sucesso',
+      [FriendshipStatus.BLOCKED]: 'Usuário desbloqueado com sucesso',
+    };
+    return { message: messages[friendship.status] };
   }
 
   /**
@@ -259,29 +279,27 @@ export class FriendsService {
    * Listar pessoas disponíveis para adicionar (não amigos)
    */
   async getAvailableUsers(userId: string, skip = 0, take = 20) {
-    // Busca todos os usuários
-    const users = await this.usersRepository.find({
-      skip,
-      take,
-    });
-
-    // Filtra o usuário atual
-    let availableUsers = users.filter((u) => u.id !== userId);
-
-    // Busca todas as amizades do usuário
-    const friendships = await this.friendshipRepository.find({
-      where: [{ userId }, { friendId: userId }],
-    });
-
-    const friendIds = friendships.flatMap((f) => [f.userId, f.friendId]);
-
     // Filtra usuários que já são amigos ou possuem pedidos pendentes
-    availableUsers = availableUsers.filter((u) => !friendIds.includes(u.id));
+    const [availableUsers, total] = await this.usersRepository
+      .createQueryBuilder('u')
+      .where('u.id != :userId', { userId })
+      .andWhere('u.banned = false')
+      .andWhere(
+        `u.id NOT IN (
+          SELECT f."friendId" FROM friendships f WHERE f."userId" = :userId
+          UNION
+          SELECT f."userId" FROM friendships f WHERE f."friendId" = :userId
+        )`,
+        { userId },
+      )
+      .orderBy('u.name', 'ASC')
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
 
-    const total = await this.usersRepository.count();
     return {
       data: availableUsers,
-      total: total - 1 - friendIds.length,
+      total,
       skip,
       take,
     };
@@ -302,30 +320,55 @@ export class FriendsService {
       return { status: 'NONE' };
     }
 
-    return { status: friendship.status };
+    if (
+      friendship.status === FriendshipStatus.BLOCKED &&
+      friendship.userId !== userId
+    ) {
+      return { status: 'NONE' };
+    }
+
+    return {
+      id: friendship.id,
+      status: friendship.status,
+      requestedByMe: friendship.userId === userId,
+    };
   }
 
   /**
    * Bloquear usuário
    */
   async blockUser(userId: string, targetUserId: string) {
-    let friendship = await this.friendshipRepository.findOne({
+    if (userId === targetUserId) {
+      throw new BadRequestException('Você não pode bloquear a si mesmo');
+    }
+
+    const target = await this.usersRepository.findOne({
+      where: { id: targetUserId },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundException('Usuário não encontrado');
+
+    const existing = await this.friendshipRepository.findOne({
       where: [
         { userId, friendId: targetUserId },
         { userId: targetUserId, friendId: userId },
       ],
     });
 
-    if (!friendship) {
-      friendship = this.friendshipRepository.create({
-        userId,
-        friendId: targetUserId,
-        status: FriendshipStatus.BLOCKED,
-      });
-    } else {
-      friendship.status = FriendshipStatus.BLOCKED;
+    if (existing?.status === FriendshipStatus.BLOCKED) {
+      if (existing.userId === userId) return existing;
+      throw new ConflictException('Não é possível bloquear este usuário');
     }
 
+    if (existing) {
+      await this.friendshipRepository.remove(existing);
+    }
+
+    const friendship = this.friendshipRepository.create({
+      userId,
+      friendId: targetUserId,
+      status: FriendshipStatus.BLOCKED,
+    });
     return this.friendshipRepository.save(friendship);
   }
 }

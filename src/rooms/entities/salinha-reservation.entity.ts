@@ -44,12 +44,12 @@ export class SalinhaReservation {
   })
   status: ReservationApprovalStatus;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   rejectionReason: string | null;
 
   @CreateDateColumn()
   createdAt: Date;
 
-  @Column({ nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   approvedAt: Date | null;
 }

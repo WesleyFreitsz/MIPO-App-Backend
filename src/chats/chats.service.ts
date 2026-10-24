@@ -5,12 +5,17 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { Chat, ChatType } from './entities/chat.entity';
 import { ChatMember, ChatMemberRole } from './entities/chat-member.entity';
 import { ChatMessage } from './entities/chat-message.entity';
 import { User } from '../users/entities/user.entity';
+import {
+  Friendship,
+  FriendshipStatus,
+} from '../friends/entities/friendship.entity';
 import { CreateChatDto } from './dto/create-chat.dto';
+import { UpdateChatDto } from './dto/update-chat.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { AddMembersDto } from './dto/add-members.dto';
 
@@ -25,7 +30,44 @@ export class ChatsService {
     private messageRepository: Repository<ChatMessage>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(Friendship)
+    private friendshipRepository: Repository<Friendship>,
   ) {}
+
+  async assertMember(chatId: string, userId: string) {
+    const member = await this.memberRepository.findOne({
+      where: { chatId, userId },
+    });
+    if (!member) {
+      throw new ForbiddenException('Você não é membro deste chat');
+    }
+    return member;
+  }
+
+  async isMember(chatId: string, userId: string) {
+    return this.memberRepository.exists({ where: { chatId, userId } });
+  }
+
+  async getMemberIds(chatId: string) {
+    const members = await this.memberRepository.find({
+      where: { chatId },
+      select: { userId: true },
+    });
+    return members.map((m) => m.userId);
+  }
+
+  private async isBlockedBetween(userId: string, otherUserId: string) {
+    return this.friendshipRepository.exists({
+      where: [
+        { userId, friendId: otherUserId, status: FriendshipStatus.BLOCKED },
+        {
+          userId: otherUserId,
+          friendId: userId,
+          status: FriendshipStatus.BLOCKED,
+        },
+      ],
+    });
+  }
 
   /**
    * Criar um novo chat (grupo ou privado)
@@ -36,7 +78,9 @@ export class ChatsService {
     type: ChatType = ChatType.GROUP,
   ) {
     const chat = this.chatRepository.create({
-      ...dto,
+      name: dto.name,
+      description: dto.description ?? null,
+      imageUrl: dto.imageUrl ?? null,
       type,
       createdByUserId: userId,
     });
@@ -53,6 +97,11 @@ export class ChatsService {
     await this.memberRepository.save(member);
 
     return this.getChatDetails(savedChat.id);
+  }
+
+  async getChatDetailsForMember(chatId: string, userId: string) {
+    await this.assertMember(chatId, userId);
+    return this.getChatDetails(chatId);
   }
 
   /**
@@ -156,8 +205,17 @@ export class ChatsService {
       (id) => !existingMemberIds.includes(id),
     );
 
-    if (newMembersIds.length > 0) {
-      const newMembers = newMembersIds.map((memberId) =>
+    const existingUsers =
+      newMembersIds.length > 0
+        ? await this.userRepository.find({
+            where: { id: In(newMembersIds), banned: false },
+            select: { id: true },
+          })
+        : [];
+    const validMemberIds = existingUsers.map((u) => u.id);
+
+    if (validMemberIds.length > 0) {
+      const newMembers = validMemberIds.map((memberId) =>
         this.memberRepository.create({
           chatId,
           userId: memberId,
@@ -238,18 +296,32 @@ export class ChatsService {
    */
   async sendMessage(chatId: string, userId: string, dto: SendMessageDto) {
     // Valida diretamente no banco para poupar memória (evita carregar arrays gigantes)
-    const isMember = await this.memberRepository.findOne({
-      where: { chatId, userId },
-    });
+    await this.assertMember(chatId, userId);
 
-    if (!isMember) {
-      throw new ForbiddenException('Você não é membro deste chat');
+    const chat = await this.chatRepository.findOne({
+      where: { id: chatId },
+      select: { id: true, type: true },
+    });
+    if (!chat) throw new NotFoundException('Chat não encontrado');
+
+    if (chat.type === ChatType.PRIVATE) {
+      const otherMemberIds = (await this.getMemberIds(chatId)).filter(
+        (id) => id !== userId,
+      );
+      for (const otherId of otherMemberIds) {
+        if (await this.isBlockedBetween(userId, otherId)) {
+          throw new ForbiddenException(
+            'Não é possível enviar mensagens para este usuário.',
+          );
+        }
+      }
     }
 
     const message = this.messageRepository.create({
       chatId,
       userId,
-      ...dto,
+      content: dto.content,
+      imageUrl: dto.imageUrl ?? null,
     });
 
     const savedMessage = await this.messageRepository.save(message);
@@ -260,13 +332,18 @@ export class ChatsService {
       updatedAt: new Date(),
     });
 
+    const sender = await this.userRepository.findOne({ where: { id: userId } });
+    if (sender) savedMessage.user = sender;
+
     return savedMessage;
   }
 
   /**
    * Listar mensagens de um chat com paginação (15 por vez)
    */
-  async getMessages(chatId: string, skip = 0, take = 15) {
+  async getMessages(chatId: string, userId: string, skip = 0, take = 15) {
+    await this.assertMember(chatId, userId);
+
     const [messages, total] = await this.messageRepository.findAndCount({
       where: { chatId },
       relations: ['user'], // Carrega só o usuário dono da mensagem
@@ -275,8 +352,12 @@ export class ChatsService {
       take,
     });
 
+    const visibleMessages = messages.map((message) =>
+      message.isDeleted ? { ...message, content: '', imageUrl: null } : message,
+    );
+
     return {
-      data: messages.reverse(), // Reverte no backend para a tela fluir do jeito correto
+      data: visibleMessages.reverse(), // Reverte no backend para a tela fluir do jeito correto
       total,
       skip,
       take,
@@ -288,8 +369,10 @@ export class ChatsService {
    * Marcar mensagens como lidas
    */
   async markMessagesAsRead(chatId: string, userId: string) {
+    await this.assertMember(chatId, userId);
+
     await this.messageRepository.update(
-      { chatId, isRead: false },
+      { chatId, isRead: false, userId: Not(userId) },
       { isRead: true },
     );
 
@@ -305,12 +388,24 @@ export class ChatsService {
    * Criar chat privado entre dois usuários de forma otimizada
    */
   async createPrivateChat(userId: string, targetUserId: string) {
+    if (userId === targetUserId) {
+      throw new BadRequestException(
+        'Não é possível iniciar uma conversa consigo mesmo.',
+      );
+    }
+
     const user = await this.userRepository.findOne({
       where: { id: targetUserId },
     });
 
-    if (!user) {
+    if (!user || user.banned) {
       throw new NotFoundException('Usuário não encontrado');
+    }
+
+    if (await this.isBlockedBetween(userId, targetUserId)) {
+      throw new ForbiddenException(
+        'Não é possível iniciar uma conversa com este usuário.',
+      );
     }
 
     const existingChat = await this.chatRepository
@@ -377,11 +472,7 @@ export class ChatsService {
   /**
    * Atualizar detalhes do chat
    */
-  async updateChatDetails(
-    chatId: string,
-    userId: string,
-    data: { name?: string; description?: string; imageUrl?: string },
-  ) {
+  async updateChatDetails(chatId: string, userId: string, data: UpdateChatDto) {
     const chat = await this.chatRepository.findOne({
       where: { id: chatId },
       relations: ['members'],
@@ -461,12 +552,17 @@ export class ChatsService {
   /**
    * Editar mensagem
    */
-  async editMessage(messageId: string, newText: string) {
+  async editMessage(messageId: string, userId: string, newText: string) {
     const message = await this.messageRepository.findOne({
       where: { id: messageId },
-      relations: ['chat'],
     });
     if (!message) throw new NotFoundException('Mensagem não encontrada');
+    if (message.userId !== userId) {
+      throw new ForbiddenException('Você só pode editar suas mensagens');
+    }
+    if (message.isDeleted) {
+      throw new BadRequestException('Mensagem apagada não pode ser editada');
+    }
 
     message.content = newText;
     message.isEdited = true;
@@ -476,14 +572,18 @@ export class ChatsService {
   /**
    * Apagar mensagem
    */
-  async deleteMessage(messageId: string) {
+  async deleteMessage(messageId: string, userId: string) {
     const message = await this.messageRepository.findOne({
       where: { id: messageId },
-      relations: ['chat'],
     });
     if (!message) throw new NotFoundException('Mensagem não encontrada');
+    if (message.userId !== userId) {
+      throw new ForbiddenException('Você só pode apagar suas mensagens');
+    }
 
     message.isDeleted = true;
+    message.content = '';
+    message.imageUrl = null;
     return this.messageRepository.save(message);
   }
 

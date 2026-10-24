@@ -6,159 +6,37 @@ import {
   Body,
   Param,
   UseGuards,
-  Request,
   Query,
   Patch,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt.guard';
 import { ChatsService } from './chats.service';
 import { CreateChatDto } from './dto/create-chat.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { AddMembersDto } from './dto/add-members.dto';
+import { UpdateChatDto } from './dto/update-chat.dto';
+import { EditMessageDto } from './dto/edit-message.dto';
+import {
+  UpdateMemberBackgroundDto,
+  UpdateMemberColorDto,
+} from './dto/member-appearance.dto';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
 
 @Controller('chats')
 @UseGuards(JwtAuthGuard)
 export class ChatsController {
   constructor(private chatsService: ChatsService) {}
 
-  /**
-   * Criar novo chat em grupo
-   * POST /chats/group
-   */
-  @Patch(':id')
-  async updateChatDetails(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Body() dto: { name?: string; description?: string; imageUrl?: string },
-  ) {
-    return this.chatsService.updateChatDetails(chatId, req.user.userId, dto);
-  }
-
-  @Post('group')
-  async createGroupChat(@Request() req, @Body() dto: CreateChatDto) {
-    return this.chatsService.createChat(req.user.userId, dto);
-  }
-
-  /**
-   * Criar chat privado com outro usuário
-   * POST /chats/private/:userId
-   */
-  @Post('private/:userId')
-  async createPrivateChat(
-    @Request() req,
-    @Param('userId') targetUserId: string,
-  ) {
-    return this.chatsService.createPrivateChat(req.user.userId, targetUserId);
-  }
-
-  /**
-   * Listar todos os chats do usuário
-   * GET /chats
-   */
-  @Get()
-  async getUserChats(
-    @Request() req,
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
-  ) {
-    return this.chatsService.getUserChats(req.user.userId, skip, take);
-  }
-
-  /**
-   * Obter detalhes de um chat
-   * GET /chats/:id
-   */
-  @Get(':id')
-  async getChatDetails(@Param('id') chatId: string) {
-    return this.chatsService.getChatDetails(chatId);
-  }
-
-  /**
-   * Enviar mensagem
-   * POST /chats/:id/messages
-   */
-  @Post(':id/messages')
-  async sendMessage(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Body() dto: SendMessageDto,
-  ) {
-    return this.chatsService.sendMessage(chatId, req.user.userId, dto);
-  }
-
-  /**
-   * Listar mensagens de um chat
-   * GET /chats/:id/messages
-   */
-  @Get(':id/messages')
-  async getMessages(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Query('skip') skip = 0,
-    @Query('take') take = 50,
-  ) {
-    return this.chatsService.getMessages(chatId, skip, take);
-  }
-
-  /**
-   * Marcar mensagens como lidas
-   * POST /chats/:id/mark-as-read
-   */
-  @Post(':id/mark-as-read')
-  async markMessagesAsRead(@Request() req, @Param('id') chatId: string) {
-    return this.chatsService.markMessagesAsRead(chatId, req.user.userId);
-  }
-
-  /**
-   * Adicionar membros ao chat
-   * POST /chats/:id/members
-   */
-  @Post(':id/members')
-  async addMembers(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Body() dto: AddMembersDto,
-  ) {
-    return this.chatsService.addMembers(chatId, req.user.userId, dto);
-  }
-
-  /**
-   * Remover membro do chat
-   * DELETE /chats/:id/members/:memberId
-   */
-  @Delete(':id/members/:memberId')
-  async removeMember(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Param('memberId') memberId: string,
-  ) {
-    return this.chatsService.removeMember(chatId, req.user.userId, memberId);
-  }
-
-  /**
-   * Sair de um chat
-   * POST /chats/:id/leave
-   */
-  @Post(':id/leave')
-  async leaveChat(@Request() req, @Param('id') chatId: string) {
-    return this.chatsService.leaveChat(chatId, req.user.userId);
-  }
-
-  /**
-   * Deletar chat
-   * DELETE /chats/:id
-   */
-  @Delete(':id')
-  async deleteChat(@Request() req, @Param('id') chatId: string) {
-    return this.chatsService.deleteChat(chatId, req.user.userId);
-  }
-
   @Patch('messages/:id')
   async editMessage(
-    @Param('id') messageId: string,
-    @Body('content') content: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) messageId: string,
+    @Body() dto: EditMessageDto,
   ) {
-    return this.chatsService.editMessage(messageId, content);
+    return this.chatsService.editMessage(messageId, user.userId, dto.content);
   }
 
   /**
@@ -167,29 +45,178 @@ export class ChatsController {
    * DELETE /chats/messages/:id
    */
   @Delete('messages/:id')
-  async deleteMessage(@Param('id') messageId: string) {
-    return this.chatsService.deleteMessage(messageId);
+  async deleteMessage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) messageId: string,
+  ) {
+    return this.chatsService.deleteMessage(messageId, user.userId);
+  }
+
+  @Patch(':id')
+  async updateChatDetails(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Body() dto: UpdateChatDto,
+  ) {
+    return this.chatsService.updateChatDetails(chatId, user.userId, dto);
   }
 
   /**
-   * Atualizar cargo do membro (Tornar Admin)
-   * PATCH /chats/:id/members/:userId/role
+   * Criar novo chat em grupo
+   * POST /chats/group
    */
+  @Post('group')
+  async createGroupChat(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateChatDto,
+  ) {
+    return this.chatsService.createChat(user.userId, dto);
+  }
+
+  /**
+   * Criar chat privado com outro usuário
+   * POST /chats/private/:userId
+   */
+  @Post('private/:userId')
+  async createPrivateChat(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) targetUserId: string,
+  ) {
+    return this.chatsService.createPrivateChat(user.userId, targetUserId);
+  }
+
+  /**
+   * Listar todos os chats do usuário
+   * GET /chats
+   */
+  @Get()
+  async getUserChats(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() pagination: PaginationQueryDto,
+  ) {
+    return this.chatsService.getUserChats(
+      user.userId,
+      pagination.skip,
+      pagination.take,
+    );
+  }
+
+  /**
+   * Obter detalhes de um chat
+   * GET /chats/:id
+   */
+  @Get(':id')
+  async getChatDetails(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+  ) {
+    return this.chatsService.getChatDetailsForMember(chatId, user.userId);
+  }
+
+  /**
+   * Enviar mensagem
+   * POST /chats/:id/messages
+   */
+  @Post(':id/messages')
+  async sendMessage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Body() dto: SendMessageDto,
+  ) {
+    return this.chatsService.sendMessage(chatId, user.userId, dto);
+  }
+
+  /**
+   * Listar mensagens de um chat
+   * GET /chats/:id/messages
+   */
+  @Get(':id/messages')
+  async getMessages(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Query() pagination: PaginationQueryDto,
+  ) {
+    return this.chatsService.getMessages(
+      chatId,
+      user.userId,
+      pagination.skip,
+      pagination.take,
+    );
+  }
+
+  /**
+   * Marcar mensagens como lidas
+   * POST /chats/:id/mark-as-read
+   */
+  @Post(':id/mark-as-read')
+  async markMessagesAsRead(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+  ) {
+    return this.chatsService.markMessagesAsRead(chatId, user.userId);
+  }
+
+  /**
+   * Adicionar membros ao chat
+   * POST /chats/:id/members
+   */
+  @Post(':id/members')
+  async addMembers(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Body() dto: AddMembersDto,
+  ) {
+    return this.chatsService.addMembers(chatId, user.userId, dto);
+  }
+
+  /**
+   * Remover membro do chat
+   * DELETE /chats/:id/members/:memberId
+   */
+  @Delete(':id/members/:memberId')
+  async removeMember(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Param('memberId', ParseUUIDPipe) memberId: string,
+  ) {
+    return this.chatsService.removeMember(chatId, user.userId, memberId);
+  }
+
+  /**
+   * Sair de um chat
+   * POST /chats/:id/leave
+   */
+  @Post(':id/leave')
+  async leaveChat(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+  ) {
+    return this.chatsService.leaveChat(chatId, user.userId);
+  }
+
+  /**
+   * Deletar chat
+   * DELETE /chats/:id
+   */
+  @Delete(':id')
+  async deleteChat(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+  ) {
+    return this.chatsService.deleteChat(chatId, user.userId);
+  }
+
   /**
    * Promover membro a Admin
    * PATCH /chats/:id/members/:memberId/promote
    */
   @Patch(':id/members/:memberId/promote')
   async promoteToAdmin(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Param('memberId') targetUserId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Param('memberId', ParseUUIDPipe) targetUserId: string,
   ) {
-    return this.chatsService.promoteToAdmin(
-      chatId,
-      req.user.userId,
-      targetUserId,
-    );
+    return this.chatsService.promoteToAdmin(chatId, user.userId, targetUserId);
   }
 
   /**
@@ -198,23 +225,23 @@ export class ChatsController {
    */
   @Patch(':id/my-color')
   async updateMyColor(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Body('color') color: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Body() dto: UpdateMemberColorDto,
   ) {
-    return this.chatsService.updateMemberColor(chatId, req.user.userId, color);
+    return this.chatsService.updateMemberColor(chatId, user.userId, dto.color);
   }
 
   @Patch(':id/my-background')
   async updateMyBackground(
-    @Request() req,
-    @Param('id') chatId: string,
-    @Body('theme') theme: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) chatId: string,
+    @Body() dto: UpdateMemberBackgroundDto,
   ) {
     return this.chatsService.updateMemberBackground(
       chatId,
-      req.user.userId,
-      theme,
+      user.userId,
+      dto.theme,
     );
   }
 }

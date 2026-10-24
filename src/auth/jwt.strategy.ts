@@ -1,19 +1,36 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
+import { InjectRepository } from '@nestjs/typeorm';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Repository } from 'typeorm';
+import { User } from 'src/users/entities/user.entity';
+import { AuthenticatedUser, JwtPayload } from './authenticated-user.interface';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor() {
+  constructor(
+    configService: ConfigService,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET || 'MIPO_SEGREDO_FORTE', // Mesmo segredo do .env
+      secretOrKey: configService.getOrThrow<string>('JWT_SECRET'),
     });
   }
 
-  async validate(payload: any) {
-    // Retorna os dados que ficarão disponíveis em req.user
-    return { userId: payload.sub, name: payload.name, role: payload.role };
+  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    const user = await this.usersRepository.findOne({
+      where: { id: payload.sub },
+      select: { id: true, name: true, role: true, banned: true },
+    });
+
+    if (!user || user.banned) {
+      throw new UnauthorizedException('Sessão inválida.');
+    }
+
+    return { userId: user.id, name: user.name, role: user.role };
   }
 }

@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, Not } from 'typeorm';
@@ -16,10 +17,16 @@ import {
 } from 'src/chats/entities/chat-member.entity';
 import { AchievementsService } from 'src/achievements/achievements.service';
 import { Achievement } from 'src/achievements/entities/achievement.entity';
+import { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { CreateEventDto } from './dto/create-event.dto';
+import { UpdateEventDto } from './dto/update-event.dto';
+
+const CHECK_IN_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 @Injectable()
-
 export class EventsService {
+  private readonly logger = new Logger(EventsService.name);
+
   constructor(
     @InjectRepository(Event) private eventRepository: Repository<Event>,
     @InjectRepository(User) private userRepository: Repository<User>,
@@ -33,7 +40,7 @@ export class EventsService {
     private notifService: NotificationsService,
   ) {}
 
-  async create(dto: any, reqUser: any) {
+  async create(dto: CreateEventDto, reqUser: AuthenticatedUser) {
     const fullUser = await this.userRepository.findOne({
       where: { id: reqUser.userId },
     });
@@ -42,19 +49,21 @@ export class EventsService {
     const isAdmin = fullUser.role === UserRole.ADMIN;
 
     // 1. Prepara os dados do evento
-    const eventData = {
-      ...dto,
+    const newEvent = this.eventRepository.create({
+      title: dto.title,
+      description: dto.description,
+      space: dto.space,
+      customLocation: dto.customLocation ?? null,
+      bannerUrl: dto.bannerUrl ?? null,
+      dateTime: new Date(dto.dateTime),
       creator: fullUser,
       status: isAdmin ? EventStatus.APPROVED : EventStatus.PENDING,
       participants: [],
       checkedInUserIds: [],
-    };
+    });
 
-    // 2. Cria a instância e salva forçando a tipagem com "as unknown as Event"
-    const newEvent = this.eventRepository.create(eventData);
-    let savedEvent = (await this.eventRepository.save(
-      newEvent,
-    )) as unknown as Event;
+    // 2. Salva o evento
+    const savedEvent = await this.eventRepository.save(newEvent);
 
     // 3. CRIA O CHAT VINCULADO AO EVENTO
     const chat = this.chatRepository.create({
@@ -86,7 +95,7 @@ export class EventsService {
     });
   }
 
-  async update(id: string, dto: any, reqUser: any) {
+  async update(id: string, dto: UpdateEventDto, reqUser: AuthenticatedUser) {
     const event = await this.eventRepository.findOne({
       where: { id },
       relations: ['creator'],
@@ -103,7 +112,15 @@ export class EventsService {
       event.status = EventStatus.PENDING;
     }
 
-    Object.assign(event, dto);
+    if (dto.title !== undefined) event.title = dto.title;
+    if (dto.description !== undefined) event.description = dto.description;
+    if (dto.space !== undefined) event.space = dto.space;
+    if (dto.customLocation !== undefined) {
+      event.customLocation = dto.customLocation;
+    }
+    if (dto.bannerUrl !== undefined) event.bannerUrl = dto.bannerUrl;
+    if (dto.dateTime !== undefined) event.dateTime = new Date(dto.dateTime);
+
     return this.eventRepository.save(event);
   }
 
@@ -114,6 +131,11 @@ export class EventsService {
     });
 
     if (!event) throw new NotFoundException('Evento não encontrado');
+    if (event.status !== EventStatus.APPROVED) {
+      throw new BadRequestException(
+        'Só é possível participar de eventos aprovados.',
+      );
+    }
 
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('Usuário não encontrado');
@@ -156,10 +178,25 @@ export class EventsService {
 
     if (!event) throw new NotFoundException('Evento não encontrado');
 
-    if (new Date() < event.dateTime) {
+    if (event.status !== EventStatus.APPROVED) {
+      throw new BadRequestException('Este evento não está disponível.');
+    }
+
+    if (!event.participants.some((p) => p.id === userId)) {
+      throw new ForbiddenException(
+        'Confirme sua presença no evento antes do check-in.',
+      );
+    }
+
+    const now = Date.now();
+    const startsAt = new Date(event.dateTime).getTime();
+    if (now < startsAt) {
       throw new BadRequestException(
         'O check-in só é permitido no horário de início.',
       );
+    }
+    if (now > startsAt + CHECK_IN_WINDOW_MS) {
+      throw new BadRequestException('O período de check-in já foi encerrado.');
     }
 
     if (!event.checkedInUserIds) event.checkedInUserIds = [];
@@ -170,11 +207,9 @@ export class EventsService {
     event.checkedInUserIds.push(userId);
     await this.eventRepository.save(event);
 
+    await this.userRepository.increment({ id: userId }, 'participation', 1);
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (user) {
-      user.participation = (user.participation || 0) + 1;
-      await this.userRepository.save(user);
-
       // 1. Gatilho por quantidade total acumulada: evento.checkin.X
       await this.achievementsService.checkAndAwardByCondition(
         userId,
@@ -196,7 +231,10 @@ export class EventsService {
         );
       }
     } catch (error) {
-      console.error('Erro ao processar conquista de evento:', error);
+      this.logger.error(
+        'Erro ao processar conquista de evento',
+        error instanceof Error ? error.stack : undefined,
+      );
     }
 
     return { message: 'Check-in realizado com sucesso.' };
@@ -225,8 +263,10 @@ export class EventsService {
       relations: ['creator'],
     });
     if (!event) throw new NotFoundException('Evento não encontrado');
+    if (event.status === EventStatus.APPROVED) return event;
 
     event.status = EventStatus.APPROVED;
+    event.rejectionReason = null;
     await this.eventRepository.save(event);
 
     await this.notifService.broadcast(
@@ -260,7 +300,7 @@ export class EventsService {
           await this.chatRepository.delete({ id: event.chatId });
 
           // 👇 RESOLVE O ERRO DE TIPAGEM AQUI 👇
-          event.chatId = null as any;
+          event.chatId = null;
         }
       }
       await this.eventRepository.save(expiredEvents);
@@ -279,7 +319,7 @@ export class EventsService {
     return this.eventRepository.save(event);
   }
 
-  async remove(id: string, reqUser: any) {
+  async remove(id: string, reqUser: AuthenticatedUser) {
     const event = await this.eventRepository.findOne({
       where: { id },
       relations: ['creator'],
@@ -305,7 +345,7 @@ export class EventsService {
         await this.chatRepository.delete({ id: event.chatId });
 
         // 👇 RESOLVE O ERRO DE TIPAGEM AQUI 👇
-        event.chatId = null as any;
+        event.chatId = null;
       }
 
       event.status = EventStatus.REPROVED;

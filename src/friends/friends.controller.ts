@@ -6,12 +6,15 @@ import {
   Body,
   Param,
   UseGuards,
-  Request,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt.guard';
 import { FriendsService } from './friends.service';
 import { CreateFriendshipDto } from './dto/create-friendship.dto';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
 
 @Controller('friends')
 @UseGuards(JwtAuthGuard)
@@ -23,8 +26,11 @@ export class FriendsController {
    * POST /friends/request
    */
   @Post('request')
-  async sendFriendRequest(@Request() req, @Body() dto: CreateFriendshipDto) {
-    return this.friendsService.sendFriendRequest(req.user.userId, dto);
+  async sendFriendRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateFriendshipDto,
+  ) {
+    return this.friendsService.sendFriendRequest(user.userId, dto);
   }
 
   /**
@@ -32,11 +38,11 @@ export class FriendsController {
    * POST /friends/:id/accept
    */
   @Post(':id/accept')
-  async acceptFriendRequest(@Request() req, @Param('id') friendshipId: string) {
-    return this.friendsService.acceptFriendRequest(
-      req.user.userId,
-      friendshipId,
-    );
+  async acceptFriendRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) friendshipId: string,
+  ) {
+    return this.friendsService.acceptFriendRequest(user.userId, friendshipId);
   }
 
   /**
@@ -44,11 +50,11 @@ export class FriendsController {
    * DELETE /friends/:id/reject
    */
   @Delete(':id/reject')
-  async rejectFriendRequest(@Request() req, @Param('id') friendshipId: string) {
-    return this.friendsService.rejectFriendRequest(
-      req.user.userId,
-      friendshipId,
-    );
+  async rejectFriendRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) friendshipId: string,
+  ) {
+    return this.friendsService.rejectFriendRequest(user.userId, friendshipId);
   }
 
   /**
@@ -57,11 +63,14 @@ export class FriendsController {
    */
   @Get()
   async getFriends(
-    @Request() req,
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() pagination: PaginationQueryDto,
   ) {
-    return this.friendsService.getFriends(req.user.userId, skip, take);
+    return this.friendsService.getFriends(
+      user.userId,
+      pagination.skip,
+      pagination.take,
+    );
   }
 
   /**
@@ -70,11 +79,14 @@ export class FriendsController {
    */
   @Get('requests/pending')
   async getFriendRequests(
-    @Request() req,
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() pagination: PaginationQueryDto,
   ) {
-    return this.friendsService.getFriendRequests(req.user.userId, skip, take);
+    return this.friendsService.getFriendRequests(
+      user.userId,
+      pagination.skip,
+      pagination.take,
+    );
   }
 
   /**
@@ -83,11 +95,14 @@ export class FriendsController {
    */
   @Get('available/users')
   async getAvailableUsers(
-    @Request() req,
-    @Query('skip') skip = 0,
-    @Query('take') take = 20,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() pagination: PaginationQueryDto,
   ) {
-    return this.friendsService.getAvailableUsers(req.user.userId, skip, take);
+    return this.friendsService.getAvailableUsers(
+      user.userId,
+      pagination.skip,
+      pagination.take,
+    );
   }
 
   /**
@@ -95,8 +110,11 @@ export class FriendsController {
    * GET /friends/:userId/status
    */
   @Get(':userId/status')
-  async getFriendshipStatus(@Request() req, @Param('userId') userId: string) {
-    return this.friendsService.getFriendshipStatus(req.user.userId, userId);
+  async getFriendshipStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.friendsService.getFriendshipStatus(user.userId, userId);
   }
 
   /**
@@ -104,8 +122,11 @@ export class FriendsController {
    * DELETE /friends/:friendId
    */
   @Delete(':friendId')
-  async removeFriend(@Request() req, @Param('friendId') friendId: string) {
-    return this.friendsService.removeFriend(req.user.userId, friendId);
+  async removeFriend(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('friendId', ParseUUIDPipe) friendId: string,
+  ) {
+    return this.friendsService.removeFriend(user.userId, friendId);
   }
 
   /**
@@ -113,7 +134,10 @@ export class FriendsController {
    * POST /friends/:userId/block
    */
   @Post(':userId/block')
-  async blockUser(@Request() req, @Param('userId') userId: string) {
-    return this.friendsService.blockUser(req.user.userId, userId);
+  async blockUser(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.friendsService.blockUser(user.userId, userId);
   }
 }

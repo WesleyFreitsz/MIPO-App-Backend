@@ -7,12 +7,14 @@ import {
   Body,
   Param,
   UseGuards,
-  ForbiddenException,
-  Req,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { RewardsService } from './rewards.service';
 import { UserRole } from 'src/users/entities/user.entity';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CreateRewardDto, UpdateRewardDto } from './dto/reward.dto';
 
 @Controller('rewards')
 export class RewardsController {
@@ -23,37 +25,27 @@ export class RewardsController {
     return this.rewardsService.findAll();
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Post()
-  async create(
-    @Body() dto: { title: string; price: number; stock: number },
-    @Req() req: any,
-  ) {
-    if (req?.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem criar recompensas.');
-    }
+  async create(@Body() dto: CreateRewardDto) {
     return this.rewardsService.create(dto);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Patch(':id')
   async update(
-    @Param('id') id: string,
-    @Body() dto: Partial<{ title: string; price: number; stock: number }>,
-    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateRewardDto,
   ) {
-    if (req?.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem editar recompensas.');
-    }
     return this.rewardsService.update(id, dto);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Delete(':id')
-  async remove(@Param('id') id: string, @Req() req: any) {
-    if (req?.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas administradores podem excluir recompensas.');
-    }
+  async remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.rewardsService.remove(id);
   }
 }

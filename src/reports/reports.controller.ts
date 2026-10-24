@@ -1,41 +1,41 @@
 import {
   Controller,
   Post,
+  Body,
   Get,
   Patch,
-  Body,
   Param,
   UseGuards,
-  Request,
-  ForbiddenException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
-import { UserRole } from '../users/entities/user.entity';
 import { ReportsService } from './reports.service';
+import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
+import { UserRole } from 'src/users/entities/user.entity';
+import { CreateReportDto } from './dto/create-report.dto';
 
 @Controller('reports')
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
   @Post()
-  create(@Request() req, @Body() body: any) {
-    return this.reportsService.createReport(req.user.userId, body);
+  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateReportDto) {
+    return this.reportsService.createReport(user.userId, dto);
   }
 
   @Get()
-  findAll(@Request() req) {
-    if (req.user.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas admins podem ver denúncias.');
-    }
+  @Roles(UserRole.ADMIN)
+  findAll() {
     return this.reportsService.findAll();
   }
 
   @Patch(':id/dismiss')
-  dismiss(@Request() req, @Param('id') id: string) {
-    if (req.user.role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Apenas admins podem gerenciar denúncias.');
-    }
+  @Roles(UserRole.ADMIN)
+  dismiss(@Param('id', ParseUUIDPipe) id: string) {
     return this.reportsService.dismiss(id);
   }
 }
