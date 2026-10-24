@@ -5,17 +5,28 @@ import {
   Logger,
   PayloadTooLargeException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'crypto';
 import { Repository } from 'typeorm';
 import { Upload } from './entities/upload.entity';
-
-const BUCKET_NAME = 'mipo-bucket';
+import { ObjectStorageService } from './object-storage.service';
 
 export const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 export const MAX_VIDEO_SIZE_BYTES = 100 * 1024 * 1024;
+
+const CANONICAL_CONTENT_TYPES: Record<string, string> = {
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  webm: 'video/webm',
+  '3gp': 'video/3gpp',
+  m4v: 'video/x-m4v',
+};
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -43,18 +54,12 @@ export type UploadKind = 'image' | 'video' | 'media';
 @Injectable()
 export class UploadsService {
   private readonly logger = new Logger(UploadsService.name);
-  private readonly supabase: ReturnType<typeof createClient>;
 
   constructor(
     @InjectRepository(Upload)
     private readonly uploadRepository: Repository<Upload>,
-    configService: ConfigService,
-  ) {
-    this.supabase = createClient(
-      configService.getOrThrow<string>('SUPABASE_URL'),
-      configService.getOrThrow<string>('SUPABASE_KEY'),
-    );
-  }
+    private readonly objectStorage: ObjectStorageService,
+  ) {}
 
   async upload(
     file: Express.Multer.File | undefined,
@@ -95,23 +100,21 @@ export class UploadsService {
     const extension = imageExtension || videoExtension;
     const fileName = `${folderFor(isVideo)}/${Date.now()}-${fileHash.substring(0, 10)}.${extension}`;
 
-    const { error } = await this.supabase.storage
-      .from(BUCKET_NAME)
-      .upload(fileName, file.buffer, {
-        contentType: mimetype,
-        upsert: false,
-      });
-
-    if (error) {
-      this.logger.error(`Erro no upload para o storage: ${error.message}`);
+    let publicUrl: string;
+    try {
+      publicUrl = await this.objectStorage.putObject(
+        fileName,
+        file.buffer,
+        CANONICAL_CONTENT_TYPES[extension],
+      );
+    } catch (error) {
+      this.logger.error(
+        `Erro no upload para o storage: ${error instanceof Error ? error.message : String(error)}`,
+      );
       throw new InternalServerErrorException(
         'Não foi possível enviar o arquivo.',
       );
     }
-
-    const {
-      data: { publicUrl },
-    } = this.supabase.storage.from(BUCKET_NAME).getPublicUrl(fileName);
 
     // 4. Salva a nova URL e o Hash na base de dados para futuras deduplicações
     await this.uploadRepository.save(

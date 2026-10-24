@@ -19,9 +19,17 @@ services:
         generateValue: true
       - key: DIRECT_URL
         sync: false
-      - key: SUPABASE_URL
+      - key: STORAGE_ENDPOINT
         sync: false
-      - key: SUPABASE_KEY
+      - key: STORAGE_REGION
+        sync: false
+      - key: STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: STORAGE_BUCKET
+        sync: false
+      - key: STORAGE_PUBLIC_URL
         sync: false
       - key: MAIL_HOST
         sync: false
