@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: mipo-backend
+    runtime: node
+    plan: free
+    region: virginia
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/main
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DB_SSL
+        value: verify
+      - key: DB_SYNCHRONIZE
+        value: "false"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DIRECT_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: MAIL_HOST
+        sync: false
+      - key: MAIL_USER
+        sync: false
+      - key: MAIL_PASS
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
