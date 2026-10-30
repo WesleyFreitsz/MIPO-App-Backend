@@ -13,7 +13,7 @@ import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { NotificationsService } from '../notifications/notifications.service';
-import { User } from '../users/entities/user.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 import { NotificationsGateway } from '../notifications/notifications.gateway'; // Importado para Real-time
 import { extractMentions } from './mentions';
 
@@ -118,15 +118,27 @@ export class PostsService {
     return this.postRepository.save(post);
   }
 
-  async deletePost(postId: string, userId: string) {
+  async deletePost(postId: string, userId: string, role: UserRole) {
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) throw new NotFoundException('Post não encontrado');
-    if (post.userId !== userId)
+    const isAuthor = post.userId === userId;
+    const isStaff = role === UserRole.ADMIN || role === UserRole.MODERATOR;
+    if (!isAuthor && !isStaff)
       throw new ForbiddenException(
         'Você não tem permissão para deletar este post',
       );
 
     await this.postRepository.remove(post);
+    if (!isAuthor) {
+      await this.notificationsService.sendToUser(
+        post.userId,
+        'Publicação removida',
+        'Uma publicação sua foi removida pela moderação por não seguir as diretrizes da comunidade.',
+        'x-circle',
+        'ALERT',
+        { type: 'general' },
+      );
+    }
     return { message: 'Post deletado com sucesso' };
   }
 

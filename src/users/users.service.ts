@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, Repository } from 'typeorm';
+import { ILike, MoreThanOrEqual, Repository } from 'typeorm';
 import { User, UserRole } from './entities/user.entity';
 import { UpdateProfileDto } from 'src/auth/dto/update-profile.dto';
 import {
@@ -98,8 +98,22 @@ export class UsersService {
   }
 
   async addCoins(id: string, amount: number) {
+    if (amount === 0) throw new BadRequestException('Informe uma quantidade.');
     await this.findOne(id);
-    await this.usersRepository.increment({ id }, 'coins', amount);
+    if (amount > 0) {
+      await this.usersRepository.increment({ id }, 'coins', amount);
+    } else {
+      const result = await this.usersRepository.decrement(
+        { id, coins: MoreThanOrEqual(-amount) },
+        'coins',
+        -amount,
+      );
+      if (!result.affected) {
+        throw new BadRequestException(
+          'O jogador não tem moedas suficientes para retirar.',
+        );
+      }
+    }
     return this.findOne(id);
   }
 

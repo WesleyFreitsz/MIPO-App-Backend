@@ -117,7 +117,7 @@ export class PostsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) postId: string,
   ) {
-    return this.postsService.deletePost(postId, user.userId);
+    return this.postsService.deletePost(postId, user.userId, user.role);
   }
 
   /**
