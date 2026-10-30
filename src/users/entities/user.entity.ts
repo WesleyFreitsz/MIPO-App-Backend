@@ -11,6 +11,8 @@ import { UserAchievement } from './user-achievement.entity';
 
 export enum UserRole {
   USER = 'USER',
+  MODERATOR = 'MODERATOR',
+  WAITER = 'WAITER',
   ADMIN = 'ADMIN',
 }
 
@@ -22,8 +24,21 @@ export class User {
   @Column()
   name: string;
 
-  @Column()
-  age: number;
+  // Legado: substituído por birthDate.
+  @Column({ type: 'int', nullable: true })
+  age: number | null;
+
+  @Column({ type: 'date', nullable: true, select: false })
+  birthDate: string | null;
+
+  @Column({ type: 'varchar', length: 40, nullable: true, select: false })
+  ageVerificationMethod: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  termsVersion: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  termsAcceptedAt: Date | null;
 
   @OneToMany(() => UserAchievement, (userAchievement) => userAchievement.user)
   achievements: UserAchievement[];
@@ -68,6 +83,12 @@ export class User {
 
   @Column({ default: false })
   banned: boolean;
+
+  @Column({ default: true })
+  showInStorePresence: boolean;
+
+  @Column({ default: true })
+  showLastSeen: boolean;
 
   @CreateDateColumn()
   createdAt: Date;

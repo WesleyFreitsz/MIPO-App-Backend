@@ -10,6 +10,9 @@ import { Repository } from 'typeorm';
 import { MailService } from 'src/mail/mail.service';
 import { User, UserRole } from 'src/users/entities/user.entity';
 import { AuthService } from './auth.service';
+import { RefreshToken } from './entities/refresh-token.entity';
+import { AccountDataService } from 'src/users/account-data.service';
+import { LEGAL_VERSION } from 'src/legal/legal.constants';
 
 const hashCode = (code: string) =>
   createHash('sha256').update(code).digest('hex');
@@ -18,6 +21,12 @@ describe('AuthService', () => {
   let usersRepository: jest.Mocked<
     Pick<Repository<User>, 'findOne' | 'update' | 'create' | 'save'>
   >;
+  let refreshTokensRepository: {
+    findOne: jest.Mock;
+    update: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+  };
   let mailService: jest.Mocked<Pick<MailService, 'sendRecoveryCode'>>;
   let service: AuthService;
 
@@ -28,14 +37,68 @@ describe('AuthService', () => {
       create: jest.fn(),
       save: jest.fn(),
     };
+    refreshTokensRepository = {
+      findOne: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      create: jest.fn((token: Partial<RefreshToken>) => token),
+      save: jest.fn(),
+    };
     mailService = { sendRecoveryCode: jest.fn() };
     const jwtService = { sign: jest.fn().mockReturnValue('token') };
 
     service = new AuthService(
       usersRepository as unknown as Repository<User>,
+      refreshTokensRepository as unknown as Repository<RefreshToken>,
       jwtService as unknown as JwtService,
       mailService as unknown as MailService,
+      {} as AccountDataService,
     );
+  });
+
+  describe('register', () => {
+    const base = {
+      name: 'Ana Souza',
+      login: 'ana@mipo.com',
+      password: 'segredo1',
+      acceptTerms: true,
+      termsVersion: LEGAL_VERSION,
+    };
+
+    it('recusa menores de 18 anos', async () => {
+      const birthDate = `${new Date().getFullYear() - 17}-01-01`;
+      await expect(service.register({ ...base, birthDate })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(usersRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('recusa aceite de uma versão antiga dos termos', async () => {
+      await expect(
+        service.register({
+          ...base,
+          birthDate: '1990-05-10',
+          termsVersion: '2000-01-01',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('grava data de nascimento, método de aferição e aceite', async () => {
+      usersRepository.findOne.mockResolvedValue(null);
+      usersRepository.create.mockImplementation((u) => u as User);
+      usersRepository.save.mockImplementation((u) =>
+        Promise.resolve({ ...u, id: 'u1', role: UserRole.USER } as User),
+      );
+
+      await service.register({ ...base, birthDate: '1990-05-10' });
+
+      expect(usersRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          birthDate: '1990-05-10',
+          ageVerificationMethod: 'SELF_DECLARED_BIRTHDATE',
+          termsVersion: LEGAL_VERSION,
+        }),
+      );
+    });
   });
 
   describe('login', () => {
@@ -184,6 +247,65 @@ describe('AuthService', () => {
           recoveryCodeExpires: null,
           recoveryAttempts: 0,
         }),
+      );
+    });
+  });
+
+  describe('refresh', () => {
+    const storedToken = (overrides: Partial<RefreshToken> = {}) =>
+      ({
+        id: 'rt1',
+        userId: 'u1',
+        tokenHash: hashCode('antigo'),
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: null,
+        ...overrides,
+      }) as RefreshToken;
+
+    it('rotaciona: revoga o token usado e emite um par novo', async () => {
+      refreshTokensRepository.findOne.mockResolvedValue(storedToken());
+      usersRepository.findOne.mockResolvedValue({
+        id: 'u1',
+        name: 'Ana',
+        role: UserRole.USER,
+        banned: false,
+        isProfileComplete: true,
+      } as User);
+
+      const result = await service.refresh('antigo');
+
+      expect(refreshTokensRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'rt1' }),
+        expect.objectContaining({ revokedAt: expect.any(Date) as Date }),
+      );
+      expect(result.refresh_token).not.toBe('antigo');
+      expect(refreshTokensRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ tokenHash: hashCode(result.refresh_token) }),
+      );
+    });
+
+    it('reuso de token revogado derruba todas as sessões do usuário', async () => {
+      refreshTokensRepository.findOne.mockResolvedValue(
+        storedToken({ revokedAt: new Date() }),
+      );
+
+      await expect(service.refresh('antigo')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(refreshTokensRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'u1' }),
+        expect.objectContaining({ revokedAt: expect.any(Date) as Date }),
+      );
+      expect(refreshTokensRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('recusa token expirado', async () => {
+      refreshTokensRepository.findOne.mockResolvedValue(
+        storedToken({ expiresAt: new Date(Date.now() - 1) }),
+      );
+
+      await expect(service.refresh('antigo')).rejects.toBeInstanceOf(
+        UnauthorizedException,
       );
     });
   });

@@ -128,3 +128,24 @@ export class GamesQueryDto {
   @IsIn(['true', 'false', 'all'])
   active?: 'true' | 'false' | 'all';
 }
+
+export class UpdateGameUserMarkDto {
+  @IsOptional()
+  @IsBoolean()
+  isFavorite?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  wantsToPlay?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  rating?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  review?: string | null;
+}

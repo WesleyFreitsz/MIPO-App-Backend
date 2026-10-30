@@ -6,13 +6,21 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Game } from './entities/game.entity';
-import { CreateGameDto, GamesQueryDto, UpdateGameDto } from './dto/game.dto';
+import { GameUserMark } from './entities/game-user-mark.entity';
+import {
+  CreateGameDto,
+  GamesQueryDto,
+  UpdateGameDto,
+  UpdateGameUserMarkDto,
+} from './dto/game.dto';
 
 @Injectable()
 export class GamesService {
   constructor(
     @InjectRepository(Game)
     private gamesRepository: Repository<Game>,
+    @InjectRepository(GameUserMark)
+    private marksRepository: Repository<GameUserMark>,
   ) {}
 
   async findAll(query: GamesQueryDto) {
@@ -64,7 +72,72 @@ export class GamesService {
   async findOne(id: string) {
     const game = await this.gamesRepository.findOne({ where: { id } });
     if (!game) throw new NotFoundException('Jogo não encontrado.');
-    return game;
+    const rating = await this.marksRepository
+      .createQueryBuilder('mark')
+      .select('AVG(mark.rating)', 'average')
+      .addSelect('COUNT(mark.rating)', 'count')
+      .where('mark.gameId = :id', { id })
+      .getRawOne<{ average: string | null; count: string }>();
+    return {
+      ...game,
+      ratingAverage: rating?.average ? Number(rating.average) : null,
+      ratingCount: Number(rating?.count ?? 0),
+    };
+  }
+
+  findMyMarks(userId: string) {
+    return this.marksRepository.find({ where: { userId } });
+  }
+
+  async updateMyMark(
+    gameId: string,
+    userId: string,
+    dto: UpdateGameUserMarkDto,
+  ) {
+    const game = await this.gamesRepository.findOne({
+      where: { id: gameId },
+      select: { id: true },
+    });
+    if (!game) throw new NotFoundException('Jogo não encontrado.');
+
+    const mark =
+      (await this.marksRepository.findOne({ where: { gameId, userId } })) ??
+      this.marksRepository.create({ gameId, userId });
+    if (dto.isFavorite !== undefined) mark.isFavorite = dto.isFavorite;
+    if (dto.wantsToPlay !== undefined) mark.wantsToPlay = dto.wantsToPlay;
+    if (dto.rating !== undefined) mark.rating = dto.rating;
+    if (dto.review !== undefined) mark.review = dto.review?.trim() || null;
+    return this.marksRepository.save(mark);
+  }
+
+  async findReviews(gameId: string, skip: number, take: number) {
+    const [marks, total] = await this.marksRepository
+      .createQueryBuilder('mark')
+      .leftJoinAndSelect('mark.user', 'user')
+      .where('mark.gameId = :gameId', { gameId })
+      .andWhere('mark.rating IS NOT NULL')
+      .orderBy('mark.updatedAt', 'DESC')
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
+    return {
+      data: marks.map((mark) => ({
+        id: mark.id,
+        rating: mark.rating,
+        review: mark.review,
+        updatedAt: mark.updatedAt,
+        user: {
+          id: mark.user.id,
+          name: mark.user.name,
+          nickname: mark.user.nickname,
+          avatarUrl: mark.user.avatarUrl,
+        },
+      })),
+      total,
+      skip,
+      take,
+      hasMore: total > skip + take,
+    };
   }
 
   async create(dto: CreateGameDto) {

@@ -42,6 +42,9 @@ export class ChatMember {
   @Column({ type: 'timestamp', nullable: true })
   lastReadAt: Date | null;
 
+  @Column({ type: 'timestamp', nullable: true })
+  lastSeenAt: Date | null;
+
   @UpdateDateColumn()
   updatedAt: Date;
 

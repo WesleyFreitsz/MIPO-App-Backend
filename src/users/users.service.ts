@@ -6,14 +6,22 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { User } from './entities/user.entity';
+import { ILike, Repository } from 'typeorm';
+import { User, UserRole } from './entities/user.entity';
 import { UpdateProfileDto } from 'src/auth/dto/update-profile.dto';
+import {
+  AGE_VERIFICATION_SELF_DECLARED,
+  LEGAL_VERSION,
+  MIN_AGE,
+  isAllowedAge,
+} from 'src/legal/legal.constants';
 
 type ProfileFields = Pick<
   User,
-  'name' | 'nickname' | 'city' | 'bio' | 'avatarUrl' | 'age'
+  'name' | 'nickname' | 'city' | 'bio' | 'avatarUrl'
 >;
+
+import { assertAllowedContent } from 'src/common/content-filter';
 
 @Injectable()
 export class UsersService {
@@ -30,8 +38,56 @@ export class UsersService {
     return user;
   }
 
-  async findAllForAdmin(skip = 0, take = 50) {
+  async findOwnProfile(id: string) {
+    const [user, legal] = await Promise.all([
+      this.findOne(id),
+      this.usersRepository.findOne({
+        where: { id },
+        select: { id: true, birthDate: true },
+      }),
+    ]);
+    return { ...user, needsBirthDate: !legal?.birthDate };
+  }
+
+  async setBirthDate(id: string, birthDate: string) {
+    const user = await this.usersRepository.findOne({
+      where: { id },
+      select: { id: true, birthDate: true },
+    });
+    if (!user) throw new NotFoundException('Usuário não encontrado');
+    if (user.birthDate) {
+      throw new BadRequestException('A data de nascimento já foi informada.');
+    }
+    if (!isAllowedAge(birthDate)) {
+      await this.usersRepository.update(id, { banned: true });
+      throw new BadRequestException(
+        `O Mipo é permitido apenas para maiores de ${MIN_AGE} anos. Sua conta foi suspensa.`,
+      );
+    }
+    await this.usersRepository.update(id, {
+      birthDate: birthDate.slice(0, 10),
+      ageVerificationMethod: AGE_VERIFICATION_SELF_DECLARED,
+    });
+    return this.findOwnProfile(id);
+  }
+
+  async acceptTerms(id: string, version: string) {
+    if (version !== LEGAL_VERSION) {
+      throw new BadRequestException('Versão dos termos desatualizada.');
+    }
+    await this.usersRepository.update(id, {
+      termsVersion: LEGAL_VERSION,
+      termsAcceptedAt: new Date(),
+    });
+    return this.findOwnProfile(id);
+  }
+
+  async findAllForAdmin(skip = 0, take = 50, search?: string) {
+    const term = search?.trim();
     const users = await this.usersRepository.find({
+      where: term
+        ? [{ name: ILike(`%${term}%`) }, { nickname: ILike(`%${term}%`) }]
+        : undefined,
       skip,
       take,
       order: { name: 'ASC' },
@@ -56,6 +112,15 @@ export class UsersService {
     return this.findOne(id);
   }
 
+  async setRole(adminId: string, id: string, role: UserRole) {
+    if (adminId === id) {
+      throw new BadRequestException('Você não pode alterar o próprio papel.');
+    }
+    await this.findOne(id);
+    await this.usersRepository.update(id, { role });
+    return this.findOne(id);
+  }
+
   async updateNotificationToken(id: string, token: string | null) {
     await this.usersRepository.update(id, { notificationToken: token });
     this.logger.debug(`[PUSH] Token de notificação atualizado para ${id}`);
@@ -64,6 +129,7 @@ export class UsersService {
 
   async updateProfile(id: string, dto: UpdateProfileDto) {
     this.logger.debug(`[PROFILE] Iniciando updateProfile para ID ${id}`);
+    assertAllowedContent(dto.name, dto.nickname, dto.bio, dto.city);
 
     await this.findOne(id);
 
@@ -84,11 +150,14 @@ export class UsersService {
     if (dto.city != null) profileFields.city = dto.city;
     if (dto.bio != null) profileFields.bio = dto.bio;
     if (dto.avatarUrl != null) profileFields.avatarUrl = dto.avatarUrl;
-    if (dto.age != null) profileFields.age = dto.age;
 
     await this.usersRepository.update(id, {
       ...profileFields,
-      isProfileComplete: true,
+      ...(Object.keys(profileFields).length > 0 && { isProfileComplete: true }),
+      ...(dto.showInStorePresence != null && {
+        showInStorePresence: dto.showInStorePresence,
+      }),
+      ...(dto.showLastSeen != null && { showLastSeen: dto.showLastSeen }),
     });
 
     this.logger.debug(

@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
+import { NotificationPreference } from './notifications/entities/notification-preference.entity';
+import { ScheduledNotification } from './notifications/entities/scheduled-notification.entity';
 
 import { User } from './users/entities/user.entity';
 // CORREÇÃO 1: Importar o Event explicitamente
@@ -22,7 +25,6 @@ import { ChatsModule } from './chats/chats.module';
 import { AchievementsModule } from './achievements/achievements.module';
 import { RewardsModule } from './rewards/rewards.module';
 import { GamesModule } from './games/games.module';
-import { RoomsModule } from './rooms/rooms.module';
 import { FinanceModule } from './finance/finance.module';
 import { Friendship } from './friends/entities/friendship.entity';
 import { Post } from './posts/entities/post.entity';
@@ -34,8 +36,6 @@ import { ChatMessage } from './chats/entities/chat-message.entity';
 import { Achievement } from './achievements/entities/achievement.entity';
 import { Reward } from './rewards/entities/reward.entity';
 import { Game } from './games/entities/game.entity';
-import { Room } from './rooms/entities/room.entity';
-import { SalinhaReservation } from './rooms/entities/salinha-reservation.entity';
 import { Transaction } from './finance/entities/transaction.entity';
 import { ReportsModule } from './reports/reports.module';
 import { Report } from './reports/entities/report.entity';
@@ -43,6 +43,33 @@ import { Upload } from './uploads/entities/upload.entity';
 import { Rarity } from './achievements/entities/rarity.entity';
 import { UploadsModule } from './uploads/uploads.module';
 import { UserAchievement } from './users/entities/user-achievement.entity';
+import { MonthlyGamesModule } from './monthly-games/monthly-games.module';
+import { MonthlyGame } from './monthly-games/entities/monthly-game.entity';
+import { MonthlyGameScore } from './monthly-games/entities/monthly-game-score.entity';
+import { GameUserMark } from './games/entities/game-user-mark.entity';
+import { RefreshToken } from './auth/entities/refresh-token.entity';
+import { RewardRedemption } from './rewards/entities/reward-redemption.entity';
+import { ChatMessageReaction } from './chats/entities/chat-message-reaction.entity';
+import { StoreVisitsModule } from './store-visits/store-visits.module';
+import { StoreVisit } from './store-visits/entities/store-visit.entity';
+import { StoreCheckinCode } from './store-visits/entities/store-checkin-code.entity';
+import { OrdersModule } from './orders/orders.module';
+import { MenuItem } from './orders/entities/menu-item.entity';
+import { OrderTab } from './orders/entities/order-tab.entity';
+import { Order } from './orders/entities/order.entity';
+import { OrderItem } from './orders/entities/order-item.entity';
+import { GamePlaysModule } from './game-plays/game-plays.module';
+import { GamePlay } from './game-plays/entities/game-play.entity';
+import { GamePlayPlayer } from './game-plays/entities/game-play-player.entity';
+import { PlayCallsModule } from './play-calls/play-calls.module';
+import { PlayCall } from './play-calls/entities/play-call.entity';
+import { PlayCallMember } from './play-calls/entities/play-call-member.entity';
+import { ReviewsModule } from './reviews/reviews.module';
+import { VisitReview } from './reviews/entities/visit-review.entity';
+import { OrderReview } from './reviews/entities/order-review.entity';
+import { LegalModule } from './legal/legal.module';
+import { CommonSecurityModule } from './common/common-security.module';
+import { RetentionModule } from './retention/retention.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -56,7 +83,8 @@ function resolveDatabaseSsl(mode: string | undefined, ca: string | undefined) {
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
+    ScheduleModule.forRoot(),
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
@@ -80,11 +108,29 @@ function resolveDatabaseSsl(mode: string | undefined, ca: string | undefined) {
             Achievement,
             Reward,
             Game,
-            Room,
-            SalinhaReservation,
             Transaction,
             Report,
             Upload,
+            MonthlyGame,
+            MonthlyGameScore,
+            GameUserMark,
+            NotificationPreference,
+            ScheduledNotification,
+            RefreshToken,
+            RewardRedemption,
+            ChatMessageReaction,
+            StoreVisit,
+            StoreCheckinCode,
+            MenuItem,
+            OrderTab,
+            Order,
+            OrderItem,
+            GamePlay,
+            GamePlayPlayer,
+            PlayCall,
+            PlayCallMember,
+            VisitReview,
+            OrderReview,
           ],
           synchronize: configService.get<string>('DB_SYNCHRONIZE') === 'true',
           ssl: resolveDatabaseSsl(configService.get<string>('DB_SSL'), sslCa),
@@ -124,10 +170,18 @@ function resolveDatabaseSsl(mode: string | undefined, ca: string | undefined) {
     AchievementsModule,
     RewardsModule,
     GamesModule,
-    RoomsModule,
     FinanceModule,
     ReportsModule,
     UploadsModule,
+    MonthlyGamesModule,
+    StoreVisitsModule,
+    OrdersModule,
+    GamePlaysModule,
+    PlayCallsModule,
+    ReviewsModule,
+    LegalModule,
+    CommonSecurityModule,
+    RetentionModule,
   ],
   controllers: [AppController],
   providers: [AppService],

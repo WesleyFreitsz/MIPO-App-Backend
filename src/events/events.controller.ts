@@ -37,7 +37,7 @@ export class EventsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
   @Get('pending')
   async findPending() {
     return this.eventsService.findPending();
@@ -71,14 +71,14 @@ export class EventsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
   @Patch(':id/approve')
   async approve(@Param('id', ParseUUIDPipe) id: string) {
     return this.eventsService.approve(id);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
   @Patch(':id/reject')
   async reject(
     @Param('id', ParseUUIDPipe) id: string,

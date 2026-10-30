@@ -1,4 +1,5 @@
 import {
+  IsEnum,
   IsOptional,
   IsString,
   IsUUID,
@@ -6,6 +7,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { ReportType } from '../entities/report.entity';
 
 export class CreateReportDto {
   @IsString()
@@ -17,8 +19,16 @@ export class CreateReportDto {
   reportedUserId: string;
 
   @IsOptional()
+  @IsEnum(ReportType)
+  type?: ReportType;
+
+  @IsOptional()
   @IsUUID()
   postId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  chatMessageId?: string;
 
   @IsOptional()
   @IsString()

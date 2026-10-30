@@ -5,10 +5,12 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Not, Repository } from 'typeorm';
+import { In, Not, Raw, Repository } from 'typeorm';
 import { Chat, ChatType } from './entities/chat.entity';
 import { ChatMember, ChatMemberRole } from './entities/chat-member.entity';
 import { ChatMessage } from './entities/chat-message.entity';
+import { ChatMessageReaction } from './entities/chat-message-reaction.entity';
+import { isUniqueViolation } from 'src/common/database-errors';
 import { User } from '../users/entities/user.entity';
 import {
   Friendship,
@@ -18,6 +20,8 @@ import { CreateChatDto } from './dto/create-chat.dto';
 import { UpdateChatDto } from './dto/update-chat.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { AddMembersDto } from './dto/add-members.dto';
+
+import { assertAllowedContent } from 'src/common/content-filter';
 
 @Injectable()
 export class ChatsService {
@@ -32,6 +36,8 @@ export class ChatsService {
     private userRepository: Repository<User>,
     @InjectRepository(Friendship)
     private friendshipRepository: Repository<Friendship>,
+    @InjectRepository(ChatMessageReaction)
+    private reactionRepository: Repository<ChatMessageReaction>,
   ) {}
 
   async assertMember(chatId: string, userId: string) {
@@ -56,17 +62,65 @@ export class ChatsService {
     return members.map((m) => m.userId);
   }
 
-  private async isBlockedBetween(userId: string, otherUserId: string) {
+  async canWatchPresence(viewerId: string, targetId: string) {
+    const sharedPrivateChat = await this.memberRepository
+      .createQueryBuilder('viewer')
+      .innerJoin(
+        ChatMember,
+        'target',
+        'target.chatId = viewer.chatId AND target.userId = :targetId',
+        { targetId },
+      )
+      .innerJoin('viewer.chat', 'chat', 'chat.type = :type', {
+        type: ChatType.PRIVATE,
+      })
+      .where('viewer.userId = :viewerId', { viewerId })
+      .getExists();
+    if (!sharedPrivateChat) return false;
+    const target = await this.userRepository.findOne({
+      where: { id: targetId },
+      select: { id: true, showLastSeen: true },
+    });
+    return (
+      !!target?.showLastSeen &&
+      !(await this.isBlockedBetween(viewerId, [targetId]))
+    );
+  }
+
+  private async isBlockedBetween(userId: string, otherUserIds: string[]) {
+    if (otherUserIds.length === 0) return false;
     return this.friendshipRepository.exists({
       where: [
-        { userId, friendId: otherUserId, status: FriendshipStatus.BLOCKED },
         {
-          userId: otherUserId,
+          userId,
+          friendId: In(otherUserIds),
+          status: FriendshipStatus.BLOCKED,
+        },
+        {
+          userId: In(otherUserIds),
           friendId: userId,
           status: FriendshipStatus.BLOCKED,
         },
       ],
     });
+  }
+
+  async loadMessage(messageId: string) {
+    const message = await this.messageRepository.findOne({
+      where: { id: messageId },
+      relations: ['user', 'replyTo', 'replyTo.user', 'reactions'],
+    });
+    if (!message) throw new NotFoundException('Mensagem não encontrada');
+    return this.hideDeletedContent(message);
+  }
+
+  private hideDeletedContent(message: ChatMessage): ChatMessage {
+    const replyTo = message.replyTo?.isDeleted
+      ? { ...message.replyTo, content: '', imageUrl: null }
+      : message.replyTo;
+    return message.isDeleted
+      ? { ...message, content: '', imageUrl: null, replyTo }
+      : { ...message, replyTo };
   }
 
   /**
@@ -77,6 +131,7 @@ export class ChatsService {
     dto: CreateChatDto,
     type: ChatType = ChatType.GROUP,
   ) {
+    assertAllowedContent(dto.name, dto.description);
     const chat = this.chatRepository.create({
       name: dto.name,
       description: dto.description ?? null,
@@ -147,27 +202,18 @@ export class ChatsService {
       .take(take)
       .getManyAndCount();
 
+    const unreadByChat = await this.countUnreadByChat(
+      chats.map((chat) => chat.id),
+      userId,
+    );
+
     const chatsWithDetails = chats.map((chat) => {
-      let unreadCount = 0;
-
-      // Agora "chat.members" existe, então ele vai encontrar o seu membro corretamente!
-      const myMember = chat.members?.find((m) => m.userId === userId);
-
-      if (chat.lastMessage && myMember) {
-        const lastMsgTime = new Date(chat.lastMessage.createdAt).getTime();
-        const lastReadTime = myMember.lastReadAt
-          ? new Date(myMember.lastReadAt).getTime()
-          : 0;
-
-        // Verifica se a mensagem é nova e se NÃO foi enviada por você mesmo
-        if (lastMsgTime > lastReadTime && chat.lastMessage.userId !== userId) {
-          unreadCount = 1;
-        }
-      }
-
       return {
         ...chat,
-        unreadCount,
+        lastMessage: chat.lastMessage
+          ? this.hideDeletedContent(chat.lastMessage)
+          : chat.lastMessage,
+        unreadCount: unreadByChat.get(chat.id) ?? 0,
       };
     });
 
@@ -179,6 +225,27 @@ export class ChatsService {
       hasMore: total > skip + take,
     };
   }
+  private async countUnreadByChat(chatIds: string[], userId: string) {
+    if (chatIds.length === 0) return new Map<string, number>();
+    const rows = await this.messageRepository
+      .createQueryBuilder('m')
+      .select('m.chatId', 'chatId')
+      .addSelect('COUNT(*)', 'count')
+      .innerJoin(
+        ChatMember,
+        'cm',
+        'cm.chatId = m.chatId AND cm.userId = :userId',
+        { userId },
+      )
+      .where('m.chatId IN (:...chatIds)', { chatIds })
+      .andWhere('m.userId != :userId', { userId })
+      .andWhere('m.isDeleted = false')
+      .andWhere('(cm.lastReadAt IS NULL OR m.createdAt > cm.lastReadAt)')
+      .groupBy('m.chatId')
+      .getRawMany<{ chatId: string; count: string }>();
+    return new Map(rows.map((row) => [row.chatId, Number(row.count)]));
+  }
+
   /**
    * Adicionar membros a um chat (Apenas Admin do Grupo)
    */
@@ -292,76 +359,134 @@ export class ChatsService {
   }
 
   /**
-   * Enviar mensagem e atualizar a última mensagem no Chat (Performance Maximizada)
+   * Enviar mensagem e atualizar a última mensagem no Chat
    */
   async sendMessage(chatId: string, userId: string, dto: SendMessageDto) {
-    // Valida diretamente no banco para poupar memória (evita carregar arrays gigantes)
-    await this.assertMember(chatId, userId);
-
-    const chat = await this.chatRepository.findOne({
-      where: { id: chatId },
-      select: { id: true, type: true },
-    });
+    assertAllowedContent(dto.content);
+    if (!dto.content.trim() && !dto.imageUrl) {
+      throw new BadRequestException('A mensagem precisa de texto ou imagem.');
+    }
+    const [chat, members, replyTo] = await Promise.all([
+      this.chatRepository.findOne({
+        where: { id: chatId },
+        select: { id: true, type: true, name: true },
+      }),
+      this.memberRepository.find({
+        where: { chatId },
+        select: { userId: true },
+      }),
+      dto.replyToId
+        ? this.messageRepository.findOne({
+            where: { id: dto.replyToId, chatId },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+    ]);
     if (!chat) throw new NotFoundException('Chat não encontrado');
 
-    if (chat.type === ChatType.PRIVATE) {
-      const otherMemberIds = (await this.getMemberIds(chatId)).filter(
-        (id) => id !== userId,
-      );
-      for (const otherId of otherMemberIds) {
-        if (await this.isBlockedBetween(userId, otherId)) {
-          throw new ForbiddenException(
-            'Não é possível enviar mensagens para este usuário.',
-          );
-        }
-      }
+    const memberIds = members.map((m) => m.userId);
+    if (!memberIds.includes(userId)) {
+      throw new ForbiddenException('Você não é membro deste chat');
+    }
+    if (dto.replyToId && !replyTo) {
+      throw new BadRequestException('Mensagem respondida não encontrada');
     }
 
-    const message = this.messageRepository.create({
-      chatId,
-      userId,
-      content: dto.content,
-      imageUrl: dto.imageUrl ?? null,
+    if (
+      chat.type === ChatType.PRIVATE &&
+      (await this.isBlockedBetween(
+        userId,
+        memberIds.filter((id) => id !== userId),
+      ))
+    ) {
+      throw new ForbiddenException(
+        'Não é possível enviar mensagens para este usuário.',
+      );
+    }
+
+    const alreadySaved = await this.findByClientId(userId, dto.clientId);
+    if (alreadySaved) {
+      const message = await this.loadMessage(alreadySaved.id);
+      return { message, memberIds, chat, duplicate: true };
+    }
+
+    let savedMessage: ChatMessage;
+    try {
+      savedMessage = await this.messageRepository.save(
+        this.messageRepository.create({
+          chatId,
+          userId,
+          content: dto.content,
+          imageUrl: dto.imageUrl ?? null,
+          replyToId: dto.replyToId ?? null,
+          clientId: dto.clientId ?? null,
+        }),
+      );
+    } catch (error) {
+      const raced = isUniqueViolation(error)
+        ? await this.findByClientId(userId, dto.clientId)
+        : null;
+      if (!raced) throw error;
+      const message = await this.loadMessage(raced.id);
+      return { message, memberIds, chat, duplicate: true };
+    }
+
+    const [, message] = await Promise.all([
+      this.chatRepository.update(chatId, {
+        lastMessageId: savedMessage.id,
+        updatedAt: new Date(),
+      }),
+      this.loadMessage(savedMessage.id),
+    ]);
+
+    return { message, memberIds, chat, duplicate: false };
+  }
+
+  private findByClientId(userId: string, clientId?: string) {
+    if (!clientId) return Promise.resolve(null);
+    return this.messageRepository.findOne({
+      where: { userId, clientId },
+      select: { id: true },
     });
-
-    const savedMessage = await this.messageRepository.save(message);
-
-    // Atualiza o chat apontando para essa nova mensagem (elimina a subquery de listagem)
-    await this.chatRepository.update(chatId, {
-      lastMessageId: savedMessage.id,
-      updatedAt: new Date(),
-    });
-
-    const sender = await this.userRepository.findOne({ where: { id: userId } });
-    if (sender) savedMessage.user = sender;
-
-    return savedMessage;
   }
 
   /**
-   * Listar mensagens de um chat com paginação (15 por vez)
+   * Listar mensagens de um chat, mais recentes primeiro, paginando por cursor
    */
-  async getMessages(chatId: string, userId: string, skip = 0, take = 15) {
+  async getMessages(
+    chatId: string,
+    userId: string,
+    before?: string,
+    take = 30,
+  ) {
     await this.assertMember(chatId, userId);
 
-    const [messages, total] = await this.messageRepository.findAndCount({
-      where: { chatId },
-      relations: ['user'], // Carrega só o usuário dono da mensagem
-      order: { createdAt: 'DESC' }, // Mais recentes primeiro para a query ser rápida
-      skip,
-      take,
+    const messages = await this.messageRepository.find({
+      where: before
+        ? {
+            chatId,
+            // Compara (createdAt, id) com a mensagem do cursor no próprio banco, sem perder os microssegundos.
+            id: Raw(
+              (idColumn) =>
+                `(${idColumn.replace(/id$/, 'createdAt')}, ${idColumn}) < (SELECT c."createdAt", c.id FROM chat_messages c WHERE c.id = :before)`,
+              { before },
+            ),
+          }
+        : { chatId },
+      relations: ['user', 'replyTo', 'replyTo.user', 'reactions'],
+      order: { createdAt: 'DESC', id: 'DESC' },
+      take: take + 1,
     });
 
-    const visibleMessages = messages.map((message) =>
-      message.isDeleted ? { ...message, content: '', imageUrl: null } : message,
-    );
+    const hasMore = messages.length > take;
+    const page = messages
+      .slice(0, take)
+      .map((message) => this.hideDeletedContent(message));
 
     return {
-      data: visibleMessages.reverse(), // Reverte no backend para a tela fluir do jeito correto
-      total,
-      skip,
-      take,
-      hasMore: total > skip + take,
+      data: page,
+      hasMore,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
     };
   }
 
@@ -402,7 +527,7 @@ export class ChatsService {
       throw new NotFoundException('Usuário não encontrado');
     }
 
-    if (await this.isBlockedBetween(userId, targetUserId)) {
+    if (await this.isBlockedBetween(userId, [targetUserId])) {
       throw new ForbiddenException(
         'Não é possível iniciar uma conversa com este usuário.',
       );
@@ -473,6 +598,7 @@ export class ChatsService {
    * Atualizar detalhes do chat
    */
   async updateChatDetails(chatId: string, userId: string, data: UpdateChatDto) {
+    assertAllowedContent(data.name, data.description);
     const chat = await this.chatRepository.findOne({
       where: { id: chatId },
       relations: ['members'],
@@ -553,6 +679,7 @@ export class ChatsService {
    * Editar mensagem
    */
   async editMessage(messageId: string, userId: string, newText: string) {
+    assertAllowedContent(newText);
     const message = await this.messageRepository.findOne({
       where: { id: messageId },
     });
@@ -564,9 +691,11 @@ export class ChatsService {
       throw new BadRequestException('Mensagem apagada não pode ser editada');
     }
 
-    message.content = newText;
-    message.isEdited = true;
-    return this.messageRepository.save(message);
+    await this.messageRepository.update(messageId, {
+      content: newText,
+      isEdited: true,
+    });
+    return this.loadMessage(messageId);
   }
 
   /**
@@ -581,10 +710,63 @@ export class ChatsService {
       throw new ForbiddenException('Você só pode apagar suas mensagens');
     }
 
-    message.isDeleted = true;
-    message.content = '';
-    message.imageUrl = null;
-    return this.messageRepository.save(message);
+    await this.messageRepository.update(messageId, {
+      isDeleted: true,
+      content: '',
+      imageUrl: null,
+    });
+    return this.loadMessage(messageId);
+  }
+
+  async toggleReaction(messageId: string, userId: string, emoji: string) {
+    const message = await this.messageRepository.findOne({
+      where: { id: messageId },
+      select: { id: true, chatId: true, isDeleted: true },
+    });
+    if (!message) throw new NotFoundException('Mensagem não encontrada');
+    await this.assertMember(message.chatId, userId);
+    if (message.isDeleted) {
+      throw new BadRequestException('Mensagem apagada não aceita reações');
+    }
+
+    const existing = await this.reactionRepository.findOne({
+      where: { messageId, userId, emoji },
+    });
+    if (existing) {
+      await this.reactionRepository.delete({ messageId, userId, emoji });
+    } else {
+      await this.reactionRepository
+        .createQueryBuilder()
+        .insert()
+        .values({ messageId, userId, emoji })
+        .orIgnore()
+        .execute();
+    }
+
+    return this.loadMessage(messageId);
+  }
+
+  async touchLastSeen(userId: string) {
+    const lastSeenAt = new Date();
+    await this.memberRepository.update({ userId }, { lastSeenAt });
+    return lastSeenAt;
+  }
+
+  async getLastSeen(userId: string) {
+    const member = await this.memberRepository.findOne({
+      where: { userId },
+      select: { lastSeenAt: true },
+      order: { lastSeenAt: { direction: 'DESC', nulls: 'LAST' } },
+    });
+    return member?.lastSeenAt ?? null;
+  }
+
+  async getPushRecipients(userIds: string[]) {
+    if (userIds.length === 0) return [];
+    return this.userRepository.find({
+      where: { id: In(userIds) },
+      select: { id: true, notificationToken: true },
+    });
   }
 
   /**

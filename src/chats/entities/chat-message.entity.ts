@@ -7,12 +7,15 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
+  OneToMany,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { Chat } from './chat.entity';
+import { ChatMessageReaction } from './chat-message-reaction.entity';
 
 @Entity('chat_messages')
 @Index(['chatId', 'createdAt'])
+@Index('UQ_chat_messages_user_client', ['userId', 'clientId'], { unique: true })
 export class ChatMessage {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -36,6 +39,19 @@ export class ChatMessage {
 
   @Column({ type: 'varchar', nullable: true })
   imageUrl: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  replyToId: string | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true, select: false })
+  clientId: string | null;
+
+  @ManyToOne(() => ChatMessage, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'replyToId' })
+  replyTo: ChatMessage | null;
+
+  @OneToMany(() => ChatMessageReaction, (reaction) => reaction.message)
+  reactions: ChatMessageReaction[];
 
   @Column({ default: false })
   isRead: boolean;

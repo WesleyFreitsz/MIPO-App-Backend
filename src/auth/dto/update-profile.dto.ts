@@ -1,12 +1,10 @@
 import {
+  IsBoolean,
   IsString,
   IsOptional,
   Matches,
-  IsInt,
   MaxLength,
   MinLength,
-  Min,
-  Max,
 } from 'class-validator';
 
 export class UpdateProfileDto {
@@ -42,9 +40,11 @@ export class UpdateProfileDto {
   })
   avatarUrl?: string;
 
-  @IsInt()
+  @IsBoolean()
   @IsOptional()
-  @Min(12)
-  @Max(120)
-  age?: number;
+  showInStorePresence?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  showLastSeen?: boolean;
 }

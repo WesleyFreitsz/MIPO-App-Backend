@@ -1,4 +1,11 @@
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import {
+  IsDateString,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class BroadcastNotificationDto {
   @IsString()
@@ -15,4 +22,12 @@ export class BroadcastNotificationDto {
   @IsString()
   @MaxLength(50)
   icon?: string;
+
+  @IsOptional()
+  @IsUUID()
+  eventId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  sendAt?: string;
 }

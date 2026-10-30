@@ -9,17 +9,20 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { MailModule } from 'src/mail/mail.module';
 import { SocketAuthService } from './socket-auth.service';
+import { RefreshToken } from './entities/refresh-token.entity';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User]), // Importante para usar o Repository no Auth
+    TypeOrmModule.forFeature([User, RefreshToken]), // Importante para usar o Repository no Auth
     PassportModule,
     MailModule,
+    UsersModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         secret: configService.getOrThrow<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '7d' },
+        signOptions: { expiresIn: '15m' },
       }),
     }),
   ],

@@ -38,6 +38,12 @@ export class AchievementsController {
     return this.achievementsService.findAll(userId);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  async findMine(@CurrentUser() user: AuthenticatedUser) {
+    return this.achievementsService.findAllWithProgress(user.userId);
+  }
+
   @Get('rarities')
   async findAllRarities() {
     return this.achievementsService.findAllRarities();

@@ -7,10 +7,19 @@ import { AchievementsController } from './achievements.controller';
 import { AchievementsService } from './achievements.service';
 import { UserAchievement } from 'src/users/entities/user-achievement.entity';
 import { NotificationsModule } from 'src/notifications/notifications.module';
+import { Friendship } from 'src/friends/entities/friendship.entity';
+import { StoreVisit } from 'src/store-visits/entities/store-visit.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Achievement, Rarity, UserAchievement, User]),
+    TypeOrmModule.forFeature([
+      Achievement,
+      Rarity,
+      UserAchievement,
+      User,
+      Friendship,
+      StoreVisit,
+    ]),
     NotificationsModule, // <-- ADICIONE AQUI
   ],
   controllers: [AchievementsController],

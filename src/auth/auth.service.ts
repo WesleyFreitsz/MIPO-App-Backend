@@ -7,19 +7,33 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { createHash, randomInt, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { User } from 'src/users/entities/user.entity';
+import { Friendship } from 'src/friends/entities/friendship.entity';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { MailService } from 'src/mail/mail.service'; // Importação do novo serviço
 import { JwtPayload } from './authenticated-user.interface';
+import { RefreshToken } from './entities/refresh-token.entity';
+import { ChangePasswordDto } from './dto/account.dto';
+import {
+  AccountDataService,
+  DELETED_ACCOUNT_NAME,
+} from 'src/users/account-data.service';
+import {
+  AGE_VERIFICATION_SELF_DECLARED,
+  LEGAL_VERSION,
+  MIN_AGE,
+  isAllowedAge,
+} from 'src/legal/legal.constants';
 
 const RECOVERY_CODE_TTL_MS = 2 * 60 * 1000;
 const MAX_RECOVERY_ATTEMPTS = 5;
+const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const FORGOT_PASSWORD_MESSAGE =
   'Se o e-mail estiver cadastrado, você receberá um código de recuperação.';
 
@@ -30,12 +44,25 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(RefreshToken)
+    private refreshTokensRepository: Repository<RefreshToken>,
     private jwtService: JwtService,
     private mailService: MailService, // Injetando o serviço de e-mail
+    private accountDataService: AccountDataService,
   ) {}
 
   // --- REGISTRO ---
   async register(dto: RegisterDto) {
+    if (!isAllowedAge(dto.birthDate)) {
+      throw new BadRequestException(
+        `O Mipo é permitido apenas para maiores de ${MIN_AGE} anos.`,
+      );
+    }
+    if (dto.termsVersion !== LEGAL_VERSION) {
+      throw new BadRequestException(
+        'Os termos foram atualizados. Abra o cadastro novamente.',
+      );
+    }
     const login = dto.login.trim();
     const isEmail = login.includes('@');
     const existingUser = await this.usersRepository.findOne({
@@ -49,13 +76,16 @@ export class AuthService {
     const newUser = this.usersRepository.create({
       name: dto.name,
       password: hashedPassword,
-      age: dto.age,
+      birthDate: dto.birthDate.slice(0, 10),
+      ageVerificationMethod: AGE_VERIFICATION_SELF_DECLARED,
+      termsVersion: LEGAL_VERSION,
+      termsAcceptedAt: new Date(),
       email: isEmail ? login : null,
       phoneNumber: !isEmail ? login : null,
     });
 
     const savedUser = await this.usersRepository.save(newUser);
-    return this.generateToken(savedUser);
+    return this.issueTokens(savedUser);
   }
 
   // --- LOGIN ---
@@ -82,7 +112,7 @@ export class AuthService {
       throw new ForbiddenException('Esta conta foi suspensa.');
     }
 
-    return this.generateToken(user);
+    return this.issueTokens(user);
   }
 
   async forgotPassword(email: string) {
@@ -158,12 +188,136 @@ export class AuthService {
       recoveryCodeExpires: null,
       recoveryAttempts: 0,
     });
+    await this.revokeAllRefreshTokens(user.id);
 
     return { message: 'Senha alterada com sucesso' };
   }
 
+  async refresh(refreshToken: string) {
+    const stored = await this.refreshTokensRepository.findOne({
+      where: { tokenHash: this.sha256(refreshToken) },
+    });
+    if (!stored || stored.expiresAt < new Date()) {
+      throw new UnauthorizedException('Sessão expirada.');
+    }
+    if (stored.revokedAt) {
+      // Reuso de um token já rotacionado indica vazamento: derruba todas as sessões.
+      await this.revokeAllRefreshTokens(stored.userId);
+      throw new UnauthorizedException('Sessão expirada.');
+    }
+
+    const rotation = await this.refreshTokensRepository.update(
+      { id: stored.id, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+    if (!rotation.affected) throw new UnauthorizedException('Sessão expirada.');
+
+    const user = await this.usersRepository.findOne({
+      where: { id: stored.userId },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        banned: true,
+        isProfileComplete: true,
+      },
+    });
+    if (!user || user.banned) {
+      throw new UnauthorizedException('Sessão inválida.');
+    }
+    return this.issueTokens(user);
+  }
+
+  async logout(refreshToken: string) {
+    await this.refreshTokensRepository.update(
+      { tokenHash: this.sha256(refreshToken), revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+    return { message: 'Sessão encerrada.' };
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.findWithPassword(userId);
+    if (!(await bcrypt.compare(dto.currentPassword, user.password))) {
+      throw new BadRequestException('Senha atual incorreta.');
+    }
+
+    await this.usersRepository.update(userId, {
+      password: await bcrypt.hash(dto.newPassword, 10),
+    });
+    await this.revokeAllRefreshTokens(userId);
+    return this.issueTokens(user);
+  }
+
+  async deleteAccount(userId: string, password: string) {
+    const user = await this.findWithPassword(userId);
+    if (!(await bcrypt.compare(password, user.password))) {
+      throw new BadRequestException('Senha incorreta.');
+    }
+
+    // Posts, mensagens e transações referenciam o usuário sem cascade,
+    // então a conta é anonimizada em vez de removida.
+    const orphanMedia = await this.usersRepository.manager.transaction(
+      async (manager) => {
+        const media = await this.accountDataService.eraseUserData(
+          manager,
+          userId,
+        );
+        await manager.update(User, userId, {
+          name: DELETED_ACCOUNT_NAME,
+          age: null,
+          birthDate: null,
+          showInStorePresence: false,
+          showLastSeen: false,
+          nickname: null,
+          email: null,
+          phoneNumber: null,
+          city: null,
+          bio: null,
+          avatarUrl: null,
+          notificationToken: null,
+          recoveryCode: null,
+          recoveryCodeExpires: null,
+          password: await bcrypt.hash(randomBytes(32).toString('hex'), 10),
+          banned: true,
+        });
+        await manager.delete(Friendship, [{ userId }, { friendId: userId }]);
+        await manager.delete(RefreshToken, { userId });
+        return media;
+      },
+    );
+    await this.accountDataService.deleteOrphanMedia(orphanMedia);
+    return { message: 'Conta excluída.' };
+  }
+
+  private async findWithPassword(userId: string) {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        password: true,
+        isProfileComplete: true,
+      },
+    });
+    if (!user) throw new UnauthorizedException('Sessão inválida.');
+    return user;
+  }
+
+  private async revokeAllRefreshTokens(userId: string) {
+    await this.refreshTokensRepository.update(
+      { userId, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+  }
+
   private hashRecoveryCode(code: string) {
-    return createHash('sha256').update(code).digest('hex');
+    return this.sha256(code);
+  }
+
+  private sha256(value: string) {
+    return createHash('sha256').update(value).digest('hex');
   }
 
   private isRecoveryCodeValid(code: string, storedHash: string) {
@@ -174,9 +328,19 @@ export class AuthService {
     );
   }
 
-  private generateToken(
+  private async issueTokens(
     user: Pick<User, 'id' | 'name' | 'role' | 'isProfileComplete'>,
   ) {
+    const refreshToken = randomBytes(48).toString('base64url');
+    await this.refreshTokensRepository.save(
+      this.refreshTokensRepository.create({
+        userId: user.id,
+        tokenHash: this.sha256(refreshToken),
+        expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+        revokedAt: null,
+      }),
+    );
+
     const payload: JwtPayload = {
       sub: user.id,
       name: user.name,
@@ -184,6 +348,7 @@ export class AuthService {
     };
     return {
       access_token: this.jwtService.sign(payload),
+      refresh_token: refreshToken,
       userId: user.id,
       isProfileComplete: user.isProfileComplete,
     };

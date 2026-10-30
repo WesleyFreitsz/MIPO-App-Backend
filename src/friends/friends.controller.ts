@@ -15,6 +15,7 @@ import { CreateFriendshipDto } from './dto/create-friendship.dto';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
 import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
+import { SearchUsersQueryDto } from './dto/search-users-query.dto';
 
 @Controller('friends')
 @UseGuards(JwtAuthGuard)
@@ -103,6 +104,24 @@ export class FriendsController {
       pagination.skip,
       pagination.take,
     );
+  }
+
+  @Get('search')
+  async searchUsers(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SearchUsersQueryDto,
+  ) {
+    return this.friendsService.searchUsers(
+      user.userId,
+      query.q,
+      query.skip,
+      query.take,
+    );
+  }
+
+  @Get('blocked')
+  async getBlockedUsers(@CurrentUser() user: AuthenticatedUser) {
+    return this.friendsService.getBlockedUsers(user.userId);
   }
 
   /**

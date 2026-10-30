@@ -334,6 +334,48 @@ export class FriendsService {
     };
   }
 
+  async searchUsers(userId: string, query: string, skip = 0, take = 20) {
+    const pattern = `%${query.trim().replace(/[\\%_]/g, '\\$&')}%`;
+    const [users, total] = await this.usersRepository
+      .createQueryBuilder('u')
+      .select(['u.id', 'u.name', 'u.nickname', 'u.avatarUrl', 'u.city'])
+      .where('u.id != :userId', { userId })
+      .andWhere('u.banned = false')
+      .andWhere('(u.name ILIKE :pattern OR u.nickname ILIKE :pattern)', {
+        pattern,
+      })
+      .andWhere(
+        `u.id NOT IN (
+          SELECT f."friendId" FROM friendships f WHERE f."userId" = :userId
+          UNION
+          SELECT f."userId" FROM friendships f WHERE f."friendId" = :userId
+        )`,
+        { userId },
+      )
+      .orderBy('u.name', 'ASC')
+      .skip(skip)
+      .take(take)
+      .getManyAndCount();
+
+    return { data: users, total, skip, take };
+  }
+
+  async getBlockedUsers(userId: string) {
+    const blocks = await this.friendshipRepository.find({
+      where: { userId, status: FriendshipStatus.BLOCKED },
+      relations: ['friend'],
+      order: { createdAt: 'DESC' },
+    });
+    return {
+      data: blocks.map((block) => ({
+        id: block.friend.id,
+        name: block.friend.name,
+        nickname: block.friend.nickname,
+        avatarUrl: block.friend.avatarUrl,
+      })),
+    };
+  }
+
   /**
    * Bloquear usuário
    */

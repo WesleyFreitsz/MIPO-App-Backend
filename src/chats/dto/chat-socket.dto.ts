@@ -1,4 +1,4 @@
-import { IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsUUID } from 'class-validator';
 import { SendMessageDto } from './send-message.dto';
 
 export class ChatRoomDto {
@@ -11,17 +11,15 @@ export class SocketSendMessageDto extends SendMessageDto {
   chatId: string;
 }
 
-export class SocketEditMessageDto {
+export class SocketTypingDto {
   @IsUUID()
-  messageId: string;
+  chatId: string;
 
-  @IsString()
-  @MinLength(1)
-  @MaxLength(5000)
-  newText: string;
+  @IsBoolean()
+  isTyping: boolean;
 }
 
-export class SocketDeleteMessageDto {
+export class SocketWatchPresenceDto {
   @IsUUID()
-  messageId: string;
+  userId: string;
 }

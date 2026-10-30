@@ -12,6 +12,7 @@ import { User } from 'src/users/entities/user.entity';
 export enum EventSpace {
   EXTERNO = 'EXTERNO',
   SALAO = 'SALAO',
+  // shortcut: mantido só para eventos antigos; a Salinha foi removida do app.
   SALINHA = 'SALINHA',
   PERSONALIZADO = 'PERSONALIZADO',
 }
@@ -65,6 +66,12 @@ export class Event {
 
   @Column({ type: 'simple-array', nullable: true })
   checkedInUserIds: string[];
+
+  @Column({ type: 'timestamp', nullable: true })
+  reminder24hSentAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  reminder1hSentAt: Date | null;
 
   @CreateDateColumn()
   createdAt: Date;

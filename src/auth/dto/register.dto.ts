@@ -1,11 +1,10 @@
 import {
   IsString,
-  IsInt,
   MinLength,
   MaxLength,
-  Min,
-  Max,
   IsNotEmpty,
+  IsDateString,
+  Equals,
 } from 'class-validator';
 
 export class RegisterDto {
@@ -21,10 +20,17 @@ export class RegisterDto {
   @MaxLength(72, { message: 'A senha deve ter no máximo 72 caracteres' })
   password: string;
 
-  @IsInt({ message: 'A idade deve ser um número inteiro' })
-  @Min(12, { message: 'Idade mínima de 12 anos' })
-  @Max(120)
-  age: number;
+  @IsDateString({ strict: true }, { message: 'Data de nascimento inválida' })
+  birthDate: string;
+
+  @Equals(true, {
+    message: 'É preciso aceitar os termos de uso e a política de privacidade',
+  })
+  acceptTerms: boolean;
+
+  @IsString()
+  @MaxLength(20)
+  termsVersion: string;
 
   // O campo login aceita tanto E-mail quanto Telefone
   // O backend vai decidir qual é qual verificando se tem "@"

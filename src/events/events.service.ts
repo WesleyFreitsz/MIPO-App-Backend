@@ -6,7 +6,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan, Not } from 'typeorm';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { Repository, LessThan, Not, Between } from 'typeorm';
 import { Event, EventStatus } from './entities/event.entity';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { User, UserRole } from 'src/users/entities/user.entity';
@@ -20,6 +21,7 @@ import { Achievement } from 'src/achievements/entities/achievement.entity';
 import { AuthenticatedUser } from 'src/auth/authenticated-user.interface';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
+import { dueReminder } from './event-reminders';
 
 const CHECK_IN_WINDOW_MS = 6 * 60 * 60 * 1000;
 
@@ -47,6 +49,7 @@ export class EventsService {
     if (!fullUser) throw new NotFoundException('Usuário não encontrado.');
 
     const isAdmin = fullUser.role === UserRole.ADMIN;
+    const canPublish = isAdmin || fullUser.role === UserRole.MODERATOR;
 
     // 1. Prepara os dados do evento
     const newEvent = this.eventRepository.create({
@@ -57,7 +60,7 @@ export class EventsService {
       bannerUrl: dto.bannerUrl ?? null,
       dateTime: new Date(dto.dateTime),
       creator: fullUser,
-      status: isAdmin ? EventStatus.APPROVED : EventStatus.PENDING,
+      status: canPublish ? EventStatus.APPROVED : EventStatus.PENDING,
       participants: [],
       checkedInUserIds: [],
     });
@@ -84,7 +87,19 @@ export class EventsService {
 
     // 5. Salva o chatId de volta no evento
     savedEvent.chatId = savedChat.id;
-    return this.eventRepository.save(savedEvent);
+    const result = await this.eventRepository.save(savedEvent);
+
+    if (savedEvent.status === EventStatus.PENDING) {
+      await this.notifService.notifyAdmins(
+        'Evento aguardando aprovação',
+        `"${savedEvent.title}" foi sugerido por ${fullUser.nickname || fullUser.name}.`,
+        { type: 'event', eventId: savedEvent.id, pending: true },
+        [UserRole.ADMIN, UserRole.MODERATOR],
+      );
+    } else {
+      await this.announceEvent(savedEvent);
+    }
+    return result;
   }
 
   async findAllForAdmin() {
@@ -119,7 +134,14 @@ export class EventsService {
       event.customLocation = dto.customLocation;
     }
     if (dto.bannerUrl !== undefined) event.bannerUrl = dto.bannerUrl;
-    if (dto.dateTime !== undefined) event.dateTime = new Date(dto.dateTime);
+    if (
+      dto.dateTime !== undefined &&
+      new Date(dto.dateTime).getTime() !== new Date(event.dateTime).getTime()
+    ) {
+      event.dateTime = new Date(dto.dateTime);
+      event.reminder24hSentAt = null;
+      event.reminder1hSentAt = null;
+    }
 
     return this.eventRepository.save(event);
   }
@@ -269,13 +291,75 @@ export class EventsService {
     event.rejectionReason = null;
     await this.eventRepository.save(event);
 
-    await this.notifService.broadcast(
+    if (event.creator) {
+      await this.notifService.sendToUser(
+        event.creator.id,
+        'Evento aprovado!',
+        `Seu evento "${event.title}" foi aprovado e já está na agenda.`,
+        'check',
+        'ALERT',
+        { type: 'event', eventId: event.id },
+      );
+    }
+    await this.announceEvent(event);
+    return event;
+  }
+
+  private announceEvent(event: Event) {
+    return this.notifService.broadcast(
       'Novo Evento!',
       `O evento "${event.title}" foi confirmado!`,
       'calendar',
-      { eventId: event.id },
+      { type: 'event', eventId: event.id },
     );
-    return event;
+  }
+
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  async runScheduledTasks() {
+    try {
+      await this.autoUpdateConcludedEvents();
+      await this.sendReminders();
+    } catch (error) {
+      this.logger.error(
+        'Erro nas tarefas agendadas de eventos',
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
+  async sendReminders(now: Date = new Date()) {
+    const upcoming = await this.eventRepository.find({
+      where: {
+        status: EventStatus.APPROVED,
+        dateTime: Between(now, new Date(now.getTime() + 24 * 60 * 60 * 1000)),
+      },
+      relations: ['participants'],
+    });
+
+    for (const event of upcoming) {
+      const kind = dueReminder(event, now);
+      if (!kind) continue;
+
+      // Marca antes de enviar: se o push falhar, perdemos um lembrete em vez de mandar em dobro
+      await this.eventRepository.update(
+        event.id,
+        kind === '1h'
+          ? {
+              reminder1hSentAt: now,
+              reminder24hSentAt: event.reminder24hSentAt ?? now,
+            }
+          : { reminder24hSentAt: now },
+      );
+      await this.notifService.sendToUsers(
+        event.participants.map((p) => p.id),
+        kind === '1h' ? 'Começa em 1 hora!' : 'É amanhã!',
+        kind === '1h'
+          ? `"${event.title}" começa daqui a pouco. Bora?`
+          : `Lembrete: "${event.title}" acontece nas próximas 24h.`,
+        'calendar',
+        { type: 'event', eventId: event.id },
+      );
+    }
   }
 
   private async autoUpdateConcludedEvents() {
@@ -316,7 +400,21 @@ export class EventsService {
 
     event.status = EventStatus.REPROVED;
     event.rejectionReason = reason;
-    return this.eventRepository.save(event);
+    const saved = await this.eventRepository.save(event);
+
+    if (event.creator) {
+      await this.notifService.sendToUser(
+        event.creator.id,
+        'Evento não aprovado',
+        reason
+          ? `"${event.title}" não foi aprovado: ${reason}`
+          : `"${event.title}" não foi aprovado.`,
+        'x-circle',
+        'ALERT',
+        { type: 'event', eventId: event.id },
+      );
+    }
+    return saved;
   }
 
   async remove(id: string, reqUser: AuthenticatedUser) {

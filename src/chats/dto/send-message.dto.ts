@@ -1,14 +1,13 @@
 import {
   IsOptional,
+  IsUUID,
   IsString,
   Matches,
   MaxLength,
-  MinLength,
 } from 'class-validator';
 
 export class SendMessageDto {
   @IsString()
-  @MinLength(1)
   @MaxLength(5000)
   content: string;
 
@@ -17,4 +16,13 @@ export class SendMessageDto {
   @MaxLength(2048)
   @Matches(/^https?:\/\//, { message: 'URL de mídia inválida' })
   imageUrl?: string;
+
+  @IsOptional()
+  @IsUUID()
+  replyToId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  clientId?: string;
 }

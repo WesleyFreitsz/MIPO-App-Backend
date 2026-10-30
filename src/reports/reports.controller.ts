@@ -28,14 +28,32 @@ export class ReportsController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
   findAll() {
     return this.reportsService.findAll();
   }
 
   @Patch(':id/dismiss')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
   dismiss(@Param('id', ParseUUIDPipe) id: string) {
     return this.reportsService.dismiss(id);
+  }
+
+  @Patch(':id/remove-post')
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  removePost(@Param('id', ParseUUIDPipe) id: string) {
+    return this.reportsService.removePost(id);
+  }
+
+  @Patch(':id/remove-chat-message')
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  removeChatMessage(@Param('id', ParseUUIDPipe) id: string) {
+    return this.reportsService.removeChatMessage(id);
+  }
+
+  @Patch(':id/ban-user')
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  banReportedUser(@Param('id', ParseUUIDPipe) id: string) {
+    return this.reportsService.banReportedUser(id);
   }
 }

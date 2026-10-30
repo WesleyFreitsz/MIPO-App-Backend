@@ -6,8 +6,14 @@ import {
   OnGatewayInit,
   OnGatewayConnection,
 } from '@nestjs/websockets';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
 import { Server, Socket } from 'socket.io';
 import { SocketAuthService } from 'src/auth/socket-auth.service';
+import { User, UserRole } from 'src/users/entities/user.entity';
+
+export const STAFF_ROOM = 'staff';
+const STAFF_ROLES = [UserRole.ADMIN, UserRole.WAITER];
 
 interface NotificationSocketData {
   userId?: string;
@@ -20,7 +26,11 @@ export class NotificationsGateway
   @WebSocketServer()
   server: Server;
 
-  constructor(private readonly socketAuthService: SocketAuthService) {}
+  constructor(
+    private readonly socketAuthService: SocketAuthService,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+  ) {}
 
   afterInit(server: Server) {
     server.use((socket, next) => {
@@ -40,9 +50,12 @@ export class NotificationsGateway
 
   async handleConnection(client: Socket) {
     const userId = (client.data as NotificationSocketData | undefined)?.userId;
-    if (userId) {
-      await client.join(`user:${userId}`);
-    }
+    if (!userId) return;
+    await client.join(`user:${userId}`);
+    const isStaff = await this.userRepository.exists({
+      where: { id: userId, role: In(STAFF_ROLES) },
+    });
+    if (isStaff) await client.join(STAFF_ROOM);
   }
 
   @SubscribeMessage('auth')
@@ -57,5 +70,13 @@ export class NotificationsGateway
 
   broadcast(payload: unknown) {
     this.server.emit('notification:new', payload);
+  }
+
+  emitToStaff(event: string, payload: unknown) {
+    this.server.to(STAFF_ROOM).emit(event, payload);
+  }
+
+  emitToUser(userId: string, event: string, payload: unknown) {
+    this.server.to(`user:${userId}`).emit(event, payload);
   }
 }

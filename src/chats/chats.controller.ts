@@ -12,6 +12,9 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt.guard';
 import { ChatsService } from './chats.service';
+import { ChatsGateway } from './chats.gateway';
+import { MessagesQueryDto } from './dto/messages-query.dto';
+import { ToggleReactionDto } from './dto/toggle-reaction.dto';
 import { CreateChatDto } from './dto/create-chat.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { AddMembersDto } from './dto/add-members.dto';
@@ -28,7 +31,10 @@ import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
 @Controller('chats')
 @UseGuards(JwtAuthGuard)
 export class ChatsController {
-  constructor(private chatsService: ChatsService) {}
+  constructor(
+    private chatsService: ChatsService,
+    private chatsGateway: ChatsGateway,
+  ) {}
 
   @Patch('messages/:id')
   async editMessage(
@@ -36,7 +42,28 @@ export class ChatsController {
     @Param('id', ParseUUIDPipe) messageId: string,
     @Body() dto: EditMessageDto,
   ) {
-    return this.chatsService.editMessage(messageId, user.userId, dto.content);
+    const message = await this.chatsService.editMessage(
+      messageId,
+      user.userId,
+      dto.content,
+    );
+    await this.chatsGateway.publishUpdatedMessage(message);
+    return message;
+  }
+
+  @Post('messages/:id/reactions')
+  async toggleReaction(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) messageId: string,
+    @Body() dto: ToggleReactionDto,
+  ) {
+    const message = await this.chatsService.toggleReaction(
+      messageId,
+      user.userId,
+      dto.emoji,
+    );
+    await this.chatsGateway.publishUpdatedMessage(message);
+    return message;
   }
 
   /**
@@ -49,7 +76,12 @@ export class ChatsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) messageId: string,
   ) {
-    return this.chatsService.deleteMessage(messageId, user.userId);
+    const message = await this.chatsService.deleteMessage(
+      messageId,
+      user.userId,
+    );
+    await this.chatsGateway.publishUpdatedMessage(message);
+    return message;
   }
 
   @Patch(':id')
@@ -123,7 +155,12 @@ export class ChatsController {
     @Param('id', ParseUUIDPipe) chatId: string,
     @Body() dto: SendMessageDto,
   ) {
-    return this.chatsService.sendMessage(chatId, user.userId, dto);
+    const { message, memberIds, chat, duplicate } =
+      await this.chatsService.sendMessage(chatId, user.userId, dto);
+    if (!duplicate) {
+      this.chatsGateway.publishMessage(message, memberIds, chat, dto.clientId);
+    }
+    return { ...message, clientId: dto.clientId };
   }
 
   /**
@@ -134,13 +171,13 @@ export class ChatsController {
   async getMessages(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) chatId: string,
-    @Query() pagination: PaginationQueryDto,
+    @Query() query: MessagesQueryDto,
   ) {
     return this.chatsService.getMessages(
       chatId,
       user.userId,
-      pagination.skip,
-      pagination.take,
+      query.before,
+      query.take,
     );
   }
 
@@ -153,7 +190,12 @@ export class ChatsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) chatId: string,
   ) {
-    return this.chatsService.markMessagesAsRead(chatId, user.userId);
+    const result = await this.chatsService.markMessagesAsRead(
+      chatId,
+      user.userId,
+    );
+    this.chatsGateway.publishRead(chatId, user.userId);
+    return result;
   }
 
   /**

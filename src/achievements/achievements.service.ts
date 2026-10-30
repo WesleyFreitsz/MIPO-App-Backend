@@ -12,6 +12,11 @@ import { User } from 'src/users/entities/user.entity';
 import { Event } from 'src/events/entities/event.entity';
 import { UserAchievement } from 'src/users/entities/user-achievement.entity';
 import { NotificationsService } from 'src/notifications/notifications.service';
+import { StoreVisit } from 'src/store-visits/entities/store-visit.entity';
+import {
+  Friendship,
+  FriendshipStatus,
+} from 'src/friends/entities/friendship.entity';
 import {
   CreateAchievementDto,
   UpdateAchievementDto,
@@ -29,7 +34,47 @@ export class AchievementsService {
     private userAchievementRepository: Repository<UserAchievement>,
     @InjectRepository(User) private userRepository: Repository<User>,
     private notificationsService: NotificationsService, // <-- ADICIONE AQUI
+    @InjectRepository(Friendship)
+    private friendshipRepository: Repository<Friendship>,
+    @InjectRepository(StoreVisit)
+    private storeVisitRepository: Repository<StoreVisit>,
   ) {}
+
+  async findAllWithProgress(userId: string) {
+    const [achievements, user, friendsCount, visitsCount] = await Promise.all([
+      this.findAll(userId),
+      this.userRepository.findOne({
+        where: { id: userId },
+        select: { id: true, participation: true },
+      }),
+      this.friendshipRepository.count({
+        where: [
+          { userId, status: FriendshipStatus.ACCEPTED },
+          { friendId: userId, status: FriendshipStatus.ACCEPTED },
+        ],
+      }),
+      this.storeVisitRepository.count({ where: { userId } }),
+    ]);
+    // Mesmos contadores usados em checkAndAwardByCondition pelos módulos de eventos e amigos.
+    const counters: Record<string, number> = {
+      'evento.checkin': user?.participation ?? 0,
+      'user.amigos': friendsCount,
+      'loja.visitas': visitsCount,
+    };
+
+    return achievements.map((ach) => {
+      const parts = ach.condition?.split('.') ?? [];
+      const target = Number(parts.pop());
+      const current = counters[parts.join('.')];
+      return {
+        ...ach,
+        progress:
+          current === undefined || !Number.isFinite(target)
+            ? null
+            : { current: Math.min(current, target), target },
+      };
+    });
+  }
 
   async findAll(userId?: string) {
     const totalUsers = await this.userRepository.count();

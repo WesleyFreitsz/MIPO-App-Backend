@@ -1,4 +1,8 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -40,5 +44,16 @@ export class ObjectStorageService {
       }),
     );
     return `${this.publicBaseUrl}/${key}`;
+  }
+
+  async deleteByUrl(url: string) {
+    const prefix = `${this.publicBaseUrl}/`;
+    if (!url.startsWith(prefix)) return;
+    await this.client.send(
+      new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: url.slice(prefix.length),
+      }),
+    );
   }
 }

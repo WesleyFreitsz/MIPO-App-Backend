@@ -6,7 +6,7 @@ import * as express from 'express';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { json, urlencoded } from 'express';
-import { RoomsSeed } from './rooms/rooms.seed';
+import helmet from 'helmet';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 function parseAllowedOrigins(): string[] {
@@ -18,6 +18,7 @@ function parseAllowedOrigins(): string[] {
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   const logger = new Logger('Bootstrap');
 
   app.set('trust proxy', 1);
@@ -60,17 +61,6 @@ async function bootstrap() {
 
   app.use(json({ limit: '10mb' }));
   app.use(urlencoded({ extended: true, limit: '1mb' }));
-
-  // Inicializar as salas fixas
-  try {
-    const roomsSeed = app.get(RoomsSeed);
-    await roomsSeed.seed();
-    logger.log('Salas fixas inicializadas');
-  } catch (error) {
-    logger.warn(
-      `Erro ao inicializar salas: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

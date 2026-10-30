@@ -3,13 +3,25 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
 import { Notifications } from './entities/notifications.entity';
+import { NotificationPreference } from './entities/notification-preference.entity';
+import { ScheduledNotification } from './entities/scheduled-notification.entity';
+import { Event } from 'src/events/entities/event.entity';
 import { User } from 'src/users/entities/user.entity';
 import { NotificationsGateway } from './notifications.gateway';
 import { AuthModule } from 'src/auth/auth.module';
 
 @Global() // Deixa global para o Posts e Reports Service usarem sem precisar importar toda hora
 @Module({
-  imports: [TypeOrmModule.forFeature([Notifications, User]), AuthModule],
+  imports: [
+    TypeOrmModule.forFeature([
+      Notifications,
+      User,
+      NotificationPreference,
+      ScheduledNotification,
+      Event,
+    ]),
+    AuthModule,
+  ],
   controllers: [NotificationsController],
   providers: [NotificationsService, NotificationsGateway],
   exports: [NotificationsService, NotificationsGateway],

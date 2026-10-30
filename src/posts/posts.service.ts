@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { Post } from './entities/post.entity';
 import { PostComment } from './entities/post-comment.entity';
 import { PostLike } from './entities/post-like.entity';
@@ -15,8 +15,11 @@ import { CreateCommentDto } from './dto/create-comment.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../users/entities/user.entity';
 import { NotificationsGateway } from '../notifications/notifications.gateway'; // Importado para Real-time
+import { extractMentions } from './mentions';
 
 type PostWithCounts = Post & { likeCount?: number; commentCount?: number };
+
+import { assertAllowedContent } from 'src/common/content-filter';
 
 @Injectable()
 export class PostsService {
@@ -32,6 +35,7 @@ export class PostsService {
   ) {}
 
   async createPost(userId: string, dto: CreatePostDto) {
+    assertAllowedContent(dto.content);
     if (!dto.content.trim() && !dto.imageUrl) {
       throw new BadRequestException('O post precisa de texto ou imagem.');
     }
@@ -41,7 +45,9 @@ export class PostsService {
       content: dto.content,
       imageUrl: dto.imageUrl ?? null,
     });
-    return this.postRepository.save(post);
+    const savedPost = await this.postRepository.save(post);
+    await this.notifyMentions(dto.content, userId, savedPost.id, 'post');
+    return savedPost;
   }
 
   async getFeed(userId: string, skip = 0, take = 20) {
@@ -94,6 +100,7 @@ export class PostsService {
   }
 
   async updatePost(postId: string, userId: string, dto: UpdatePostDto) {
+    assertAllowedContent(dto.content);
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) throw new NotFoundException('Post não encontrado');
     if (post.userId !== userId)
@@ -166,6 +173,7 @@ export class PostsService {
   }
 
   async updateComment(commentId: string, userId: string, content: string) {
+    assertAllowedContent(content);
     const comment = await this.commentRepository.findOne({
       where: { id: commentId },
     });
@@ -199,6 +207,7 @@ export class PostsService {
   }
 
   async commentPost(postId: string, userId: string, dto: CreateCommentDto) {
+    assertAllowedContent(dto.content);
     const post = await this.postRepository.findOne({ where: { id: postId } });
     if (!post) throw new NotFoundException('Post não encontrado');
 
@@ -208,6 +217,7 @@ export class PostsService {
       content: dto.content,
     });
     await this.commentRepository.save(comment);
+    await this.notifyMentions(dto.content, userId, post.id, 'comentário');
 
     if (post.userId !== userId) {
       const commenter = await this.postRepository.manager.findOne(User, {
@@ -252,6 +262,43 @@ export class PostsService {
 
     await this.commentRepository.remove(comment);
     return { message: 'Comentário deletado com sucesso' };
+  }
+
+  private async notifyMentions(
+    content: string,
+    authorId: string,
+    postId: string,
+    origin: 'post' | 'comentário',
+  ) {
+    const nicknames = extractMentions(content);
+    if (nicknames.length === 0) return;
+
+    const [author, mentioned] = await Promise.all([
+      this.postRepository.manager.findOne(User, {
+        where: { id: authorId },
+        select: { id: true, name: true, nickname: true },
+      }),
+      this.postRepository.manager
+        .createQueryBuilder(User, 'u')
+        .select(['u.id'])
+        .where('LOWER(u.nickname) IN (:...nicknames)', { nicknames })
+        .andWhere({ id: Not(authorId), banned: false })
+        .getMany(),
+    ]);
+    if (!author) return;
+
+    await Promise.all(
+      mentioned.map((user) =>
+        this.notificationsService.sendToUser(
+          user.id,
+          'Você foi mencionado! 📣',
+          `@${author.nickname || author.name} mencionou você em um ${origin}.`,
+          'at-sign',
+          'ALERT',
+          { postId },
+        ),
+      ),
+    );
   }
 
   private postsWithCountsQuery() {
